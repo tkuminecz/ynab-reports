@@ -310,8 +310,8 @@ async function main() {
         payoff_n: Infinity,
       } satisfies PayoffDebt;
     })
-    .filter((d) => d.true_balance < 0)
-    .sort(DEBT_PAYOFF_SORT);
+    .filter((d) => d.true_balance < 0);
+  // .sort(DEBT_PAYOFF_SORT);
   console.log("All Debts");
   if (debts.length === 0) {
     console.log(colors.green("You are debt free!"));
@@ -378,15 +378,81 @@ async function main() {
   const payoffRows: (string | number)[][] = [];
   const payoffDebts = lodash.cloneDeep(debts);
 
+  /**
+   * calculates the order in which debts should be paid off
+   * @param ds
+   * @returns
+   */
+  function calc_payoff_order(ds: PayoffDebt[]) {
+    return lodash
+      .cloneDeep(ds)
+      .filter((d) => d.true_balance < 0)
+      .sort((a, b) => {
+        // pay off lowest balance first as long as they are not zero interest
+        if (a.interest_rate > 0 && b.interest_rate > 0) {
+          return b.true_balance - a.true_balance;
+        } else {
+          return b.interest_rate - a.interest_rate;
+        }
+      });
+  }
+  let payoffOrder = calc_payoff_order(debts);
+  console.log(
+    "->payoff order",
+    payoffOrder.map((d) => d.name)
+  );
+  const is_next_priority_debt = (debt: PayoffDebt): boolean => {
+    const [first] = payoffOrder;
+    if (!first) {
+      return false;
+    }
+    return first.name === debt.name;
+  };
+
+  // first we pay off each debt
   let n = 0;
+  let snowball = total_snowball;
   for (const month of generate_months()) {
+    console.log("-------\nMonth", month);
+    console.log(
+      table([
+        ["total_debt", "snowball"],
+        [fmt(calc_total_debt(payoffDebts)), fmt(snowball)],
+      ])
+    );
+
+    payoffOrder = calc_payoff_order(payoffDebts);
+    console.log(`-> Next priority debt ${payoffOrder[0].name}`);
+
     payoffRows.push([month, ...payoffDebts.map((debt) => debt.true_balance)]);
 
     payoffDebts.forEach((debt, i) => {
-      const { payment } = debt;
-      debt.true_balance = Math.min(0, debt.true_balance + payment);
-      if (debt.true_balance === 0 && debts[i].payoff_n > n) {
-        debts[i].payoff_n = n;
+      if (debt.true_balance < 0) {
+        const { payment } = debt;
+        const snowball_applied = is_next_priority_debt(debt) ? snowball : 0;
+        const new_balance = Math.min(
+          0,
+          debt.true_balance + payment + snowball_applied
+        );
+        console.log(
+          `Paying ${fmt(payment + snowball_applied)} (${fmt(
+            payment
+          )} payment + ${fmt(snowball_applied)} snowball) to ${
+            debt.name
+          }. ${fmt(new_balance)} left`
+        );
+        if (new_balance === 0 && debt.true_balance < 0) {
+          console.log(
+            `-> Paid off ${debt.name}! Adding payment of ${fmt(
+              debt.payment
+            )} to snowball.`
+          );
+          snowball += payment;
+          // if (debts[i].payoff_n > n) {
+          debts[i].payoff_n = n;
+          //   }
+        }
+        debt.true_balance = new_balance;
       }
     });
     const total_debt = calc_total_debt(payoffDebts);
@@ -401,7 +467,9 @@ async function main() {
   const debts_by_payoff_date = lodash.cloneDeep(debts).sort((a, b) => {
     return a.payoff_n - b.payoff_n;
   });
+  console.log("->payoffs", debts_by_payoff_date);
   const payoff_date_rows: (string | number)[][] = [];
+  let n2 = 0;
   for (const month of generate_months()) {
     payoff_date_rows.push([
       month,
@@ -415,8 +483,10 @@ async function main() {
     if (total_debt >= 0) {
       break;
     }
+    n2 += 1;
   }
 
+  console.log();
   console.log("Payoff Plan");
   console.log(
     table(
@@ -435,5 +505,6 @@ async function main() {
       }
     )
   );
+  console.log(`Debt free in ${n2} months`);
 }
 main();

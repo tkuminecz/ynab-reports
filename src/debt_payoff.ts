@@ -1,9 +1,14 @@
 import * as ynab from "ynab";
 import colors from "colors";
 import lodash from "lodash";
-import { createStream as createTableStream, table } from "table";
+import {
+  ColumnUserConfig,
+  createStream as createTableStream,
+  table,
+} from "table";
 import { Redis } from "@upstash/redis";
 import { get_min_payment, my_accounts } from "./accounts";
+import { inspect } from "util";
 
 const budget_id = process.env.YNAB_BUDGET_ID!;
 
@@ -202,6 +207,7 @@ async function main() {
   });
   ccTotals.name = "Totals";
 
+  /* list credit cards */
   console.log("Credit Cards");
   const creditCardColumns = Object.keys(creditCards[0]);
   console.log(
@@ -269,6 +275,7 @@ async function main() {
     };
   });
 
+  /* list loans */
   console.log("Loans");
   const loanColumns = Object.keys(loans[0]);
   console.log(
@@ -306,7 +313,8 @@ async function main() {
       } satisfies PayoffDebt;
     })
     .filter((d) => d.true_balance < 0);
-  // .sort(DEBT_PAYOFF_SORT);
+
+  /* list all debts */
   console.log("All Debts");
   if (debts.length === 0) {
     console.log(colors.green("You are debt free!"));
@@ -392,11 +400,9 @@ async function main() {
       .filter((d) => d.true_balance < 0)
       .sort(payoffSort);
   }
+
   let payoffOrder = calc_payoff_order(debts);
-  console.log(
-    "->payoff order",
-    payoffOrder.map((d) => d.name)
-  );
+
   const is_next_priority_debt = (debt: PayoffDebt): boolean => {
     const [first] = payoffOrder;
     if (!first) {
@@ -405,20 +411,46 @@ async function main() {
     return first.name === debt.name;
   };
 
+  interface PayoffStepDebt {
+    name: string;
+    balance: number;
+    payment: number;
+    snowball: number;
+    carryover: number;
+  }
+  interface PayoffStep {
+    n: number;
+    month: string;
+    debts: PayoffStepDebt[];
+    snowball: number;
+    total_payments: number;
+    total_debt: number;
+  }
+
+  const payoff_steps: PayoffStep[] = [];
+
   // first we pay off each debt
   let n = 0;
-  let snowball = 50_000;
+  let snowball = total_snowball;
   for (const month of generate_months()) {
-    console.log(`----------------------\nMonth ${month} (${n})`);
-    console.log(
-      table([
-        ["total_debt", "snowball"],
-        [fmt(calc_total_debt(payoffDebts)), fmt(snowball)],
-      ])
-    );
+    if (process.env.VERBOSE) {
+      console.log(`----------------------\nMonth ${month} (${n})`);
+      console.log(
+        table([
+          ["total_debt", "snowball"],
+          [fmt(calc_total_debt(payoffDebts)), fmt(snowball)],
+        ])
+      );
+    }
 
     payoffOrder = calc_payoff_order(payoffDebts);
-    console.log(`-> Next priority debt ${payoffOrder[0].name}`);
+    if (process.env.VERBOSE) {
+      console.log(`-> Next priority debt ${payoffOrder[0].name}`);
+    }
+
+    let total_payments = 0;
+
+    let debt_payoff_records: Array<PayoffStepDebt> = [];
 
     let carry_over = 0;
     payoffDebts.sort(payoffSort).forEach((debt, i) => {
@@ -428,18 +460,30 @@ async function main() {
         const total_payment = payment + snowball_applied + carry_over;
         const new_balance = Math.min(0, debt.true_balance + total_payment);
 
+        debt_payoff_records.push({
+          name: debt.name,
+          balance: debt.true_balance,
+          payment: payment,
+          snowball: snowball_applied,
+          carryover: carry_over,
+        });
+
+        total_payments += total_payment;
+
         const snowball_str =
           snowball_applied > 0 ? ` + ${fmt(snowball_applied)} snowball` : "";
         const carry_over_str =
           carry_over > 0 ? ` + ${fmt(carry_over)} carryover` : "";
 
-        console.log(
-          `Paying ${fmt(total_payment)} (${fmt(
-            payment
-          )} payment${snowball_str}${carry_over_str}) to ${debt.name}. ${fmt(
-            debt.true_balance
-          )} + ${fmt(total_payment)} = ${fmt(new_balance)} left`
-        );
+        if (process.env.VERBOSE) {
+          console.log(
+            `Paying ${fmt(total_payment)} (${fmt(
+              payment
+            )} payment${snowball_str}${carry_over_str}) to ${debt.name}. ${fmt(
+              debt.true_balance
+            )} + ${fmt(total_payment)} = ${fmt(new_balance)} left`
+          );
+        }
 
         carry_over =
           total_payment > Math.abs(debt.true_balance)
@@ -447,11 +491,13 @@ async function main() {
             : 0;
 
         if (new_balance === 0 && debt.true_balance < 0) {
-          console.log(
-            `-> Paid off ${debt.name}! Adding payment of ${fmt(
-              debt.payment
-            )} to snowball.`
-          );
+          if (process.env.VERBOSE) {
+            console.log(
+              `-> Paid off ${debt.name}! Adding payment of ${fmt(
+                debt.payment
+              )} to snowball.`
+            );
+          }
           snowball += payment;
           // if (debts[i].payoff_n > n) {
           debts[i].payoff_n = n;
@@ -460,17 +506,109 @@ async function main() {
         debt.true_balance = new_balance;
 
         if (carry_over > 0) {
-          console.log(`-> Carry over of ${fmt(carry_over)}`);
+          if (process.env.VERBOSE) {
+            console.log(`-> Carry over of ${fmt(carry_over)}`);
+          }
         }
+      } else {
+        debt_payoff_records.push({
+          name: debt.name,
+          balance: 0,
+          payment: 0,
+          snowball: 0,
+          carryover: 0,
+        });
       }
     });
     const total_debt = calc_total_debt(payoffDebts);
+
+    payoff_steps.push({
+      n,
+      month,
+      debts: debt_payoff_records,
+      snowball,
+      total_payments,
+      total_debt,
+    });
 
     n += 1;
     if (total_debt >= 0) {
       break;
     }
-    console.log("\n");
+    if (process.env.VERBOSE) {
+      console.log("\n");
+    }
   }
+
+  console.log("Payoff Plan");
+  console.log(
+    table(
+      [
+        [
+          "n",
+          "month",
+          ...payoff_steps[0].debts.map((d) => d.name),
+          "req_payments",
+          "snowball",
+          "total_payments",
+          "total_debt",
+        ].map((h) => colors.dim(h)),
+        ...payoff_steps.map((step) => {
+          return [
+            step.n,
+            step.month,
+            ...step.debts.map((d) => {
+              if (d.balance === 0) {
+                return colors.dim("¬");
+              }
+              const pay_str =
+                d.payment > 0 ? `+ ${fmt(d.payment)} req  \n` : "";
+              const snowball_str =
+                d.snowball > 0 ? `+ ${fmt(d.snowball)} snwbl\n` : "";
+              const carry_str =
+                d.carryover > 0 ? `+ ${fmt(d.carryover)} carry\n` : "";
+              const total_pay = `${fmt(
+                d.payment + d.snowball + d.carryover
+              )} pay  `;
+              return ` ${fmt(d.balance)} bal  \n${colors.dim(
+                pay_str
+              )}${colors.dim(snowball_str)}${carry_str}${total_pay}`;
+            }),
+            fmt(step.total_payments - step.snowball),
+            fmt(step.snowball),
+            fmt(step.total_payments),
+            fmt(step.total_debt),
+          ];
+        }),
+      ],
+      {
+        columns: [
+          {
+            alignment: "right",
+          },
+          {
+            alignment: "right",
+          },
+          ...payoff_steps[0].debts.map(() => {
+            return {
+              alignment: "right",
+            };
+          }),
+          {
+            alignment: "right",
+          },
+          {
+            alignment: "right",
+          },
+          {
+            alignment: "right",
+          },
+          {
+            alignment: "right",
+          },
+        ] as ColumnUserConfig[],
+      }
+    )
+  );
 }
 main();

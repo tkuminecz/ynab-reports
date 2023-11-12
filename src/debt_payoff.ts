@@ -381,14 +381,30 @@ async function main() {
   /* Payoff plan */
   const payoffDebts = lodash.cloneDeep(debts);
 
-  const payoffSort = (a: PayoffDebt, b: PayoffDebt) => {
-    // pay off lowest balance first as long as they are not zero interest
-    if (a.interest_rate > 0 && b.interest_rate > 0) {
-      return b.true_balance - a.true_balance;
-    } else {
-      return b.interest_rate - a.interest_rate;
-    }
+  const dumbSnowballSort = (a: PayoffDebt, b: PayoffDebt) => {
+    return b.true_balance - a.true_balance;
   };
+
+  const smartSnowballSort = (a: PayoffDebt, b: PayoffDebt) => {
+    if (a.interest_rate === 0 && b.interest_rate > 0) {
+      return 1;
+    }
+    if (a.interest_rate > 0 && b.interest_rate === 0) {
+      return -1;
+    }
+    return b.true_balance - a.true_balance;
+  };
+
+  const monthlyInterestSort = (a: PayoffDebt, b: PayoffDebt) => {
+    return a.monthly_interest - b.monthly_interest;
+  };
+
+  const interestRateSort = (a: PayoffDebt, b: PayoffDebt) => {
+    return b.interest_rate - a.interest_rate;
+  };
+
+  // const PAYOFF_STRATEGY_SORT = smartSnowballSort;
+  const PAYOFF_STRATEGY_SORT = interestRateSort;
 
   /**
    * calculates the order in which debts should be paid off
@@ -399,10 +415,18 @@ async function main() {
     return lodash
       .cloneDeep(ds)
       .filter((d) => d.true_balance < 0)
-      .sort(payoffSort);
+      .sort(PAYOFF_STRATEGY_SORT);
   }
 
   let payoffOrder = calc_payoff_order(debts);
+
+  console.log("Payoff Order");
+  console.log(
+    table([
+      ["order", "name", "balance"],
+      ...payoffOrder.map((debt, i) => [i, debt.name, fmt(debt.true_balance)]),
+    ])
+  );
 
   const is_next_priority_debt = (debt: PayoffDebt): boolean => {
     const [first] = payoffOrder;
@@ -433,7 +457,7 @@ async function main() {
 
   // first we pay off each debt
   let n = 0;
-  let snowball = total_snowball;
+  let snowball = 0;
   for (const month of generate_months()) {
     if (process.env.VERBOSE) {
       console.log(`----------------------\nMonth ${month} (${n})`);
@@ -445,7 +469,7 @@ async function main() {
       );
     }
 
-    payoffOrder = calc_payoff_order(payoffDebts);
+    // payoffOrder = calc_payoff_order(payoffDebts);
     if (process.env.VERBOSE) {
       console.log(`-> Next priority debt ${payoffOrder[0].name}`);
     }
@@ -454,8 +478,9 @@ async function main() {
 
     let debt_payoff_records: Array<PayoffStepDebt> = [];
 
+    const snowball_start = snowball;
     let carry_over = 0;
-    payoffDebts.sort(payoffSort).forEach((debt, i) => {
+    payoffDebts.forEach((debt, i) => {
       if (debt.true_balance < 0) {
         const { payment } = debt;
         const snowball_applied = is_next_priority_debt(debt) ? snowball : 0;
@@ -532,7 +557,7 @@ async function main() {
       n,
       month,
       debts: debt_payoff_records,
-      snowball,
+      snowball: snowball_start,
       total_payments,
       total_debt,
     });
@@ -578,7 +603,8 @@ async function main() {
               )} pay  `;
               const carry_out =
                 d.carryover_out > 0 ? `\n${fmt(d.carryover_out)} over ` : "";
-              return ` ${fmt(d.balance)} bal  \n${colors.dim(
+
+              return `${d.name}\n ${fmt(d.balance)} bal  \n${colors.dim(
                 pay_str
               )}${colors.dim(snowball_str)}${colors.dim(
                 carry_in_str

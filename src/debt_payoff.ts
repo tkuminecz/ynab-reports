@@ -85,6 +85,7 @@ function getPreviousMonth() {
 function* generate_months() {
   const date = new Date();
   date.setDate(1);
+  date.setMonth(date.getMonth() + 1);
 
   while (true) {
     const year = date.getFullYear();
@@ -200,8 +201,8 @@ async function main() {
       spending: acc.spending + card.spending,
       for_payment: acc.for_payment + card.for_payment,
       min_payment: acc.min_payment + card.min_payment,
-      interest_rate: acc.interest_rate + card.interest_rate,
       true_balance: acc.true_balance + card.true_balance,
+      interest_rate: acc.interest_rate + card.interest_rate,
       snowball: acc.snowball + card.snowball,
     };
   });
@@ -417,6 +418,7 @@ async function main() {
     payment: number;
     snowball: number;
     carryover: number;
+    carryover_out: number;
   }
   interface PayoffStep {
     n: number;
@@ -460,12 +462,18 @@ async function main() {
         const total_payment = payment + snowball_applied + carry_over;
         const new_balance = Math.min(0, debt.true_balance + total_payment);
 
+        const carry_over_out =
+          total_payment > Math.abs(debt.true_balance)
+            ? total_payment - Math.abs(debt.true_balance)
+            : 0;
+
         debt_payoff_records.push({
           name: debt.name,
           balance: debt.true_balance,
           payment: payment,
           snowball: snowball_applied,
           carryover: carry_over,
+          carryover_out: carry_over_out,
         });
 
         total_payments += total_payment;
@@ -485,10 +493,7 @@ async function main() {
           );
         }
 
-        carry_over =
-          total_payment > Math.abs(debt.true_balance)
-            ? total_payment - Math.abs(debt.true_balance)
-            : 0;
+        carry_over = carry_over_out;
 
         if (new_balance === 0 && debt.true_balance < 0) {
           if (process.env.VERBOSE) {
@@ -517,6 +522,7 @@ async function main() {
           payment: 0,
           snowball: 0,
           carryover: 0,
+          carryover_out: 0,
         });
       }
     });
@@ -559,20 +565,24 @@ async function main() {
             step.month,
             ...step.debts.map((d) => {
               if (d.balance === 0) {
-                return colors.dim("¬");
+                return "";
               }
               const pay_str =
                 d.payment > 0 ? `+ ${fmt(d.payment)} req  \n` : "";
               const snowball_str =
                 d.snowball > 0 ? `+ ${fmt(d.snowball)} snwbl\n` : "";
-              const carry_str =
+              const carry_in_str =
                 d.carryover > 0 ? `+ ${fmt(d.carryover)} carry\n` : "";
               const total_pay = `${fmt(
                 d.payment + d.snowball + d.carryover
               )} pay  `;
+              const carry_out =
+                d.carryover_out > 0 ? `\n${fmt(d.carryover_out)} over ` : "";
               return ` ${fmt(d.balance)} bal  \n${colors.dim(
                 pay_str
-              )}${colors.dim(snowball_str)}${carry_str}${total_pay}`;
+              )}${colors.dim(snowball_str)}${colors.dim(
+                carry_in_str
+              )}${total_pay}${colors.dim(carry_out)}`;
             }),
             fmt(step.total_payments - step.snowball),
             fmt(step.snowball),

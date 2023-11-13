@@ -403,8 +403,8 @@ async function main() {
     return b.interest_rate - a.interest_rate;
   };
 
-  // const PAYOFF_STRATEGY_SORT = smartSnowballSort;
-  const PAYOFF_STRATEGY_SORT = interestRateSort;
+  const PAYOFF_STRATEGY_SORT = smartSnowballSort;
+  // const PAYOFF_STRATEGY_SORT = interestRateSort;
 
   /**
    * calculates the order in which debts should be paid off
@@ -428,8 +428,11 @@ async function main() {
     ])
   );
 
-  const is_next_priority_debt = (debt: PayoffDebt): boolean => {
-    const [first] = payoffOrder;
+  const is_next_priority_debt = (
+    order: PayoffDebt[],
+    debt: PayoffDebt
+  ): boolean => {
+    const [first] = order; //.filter((debt) => debt.true_balance < 0);
     if (!first) {
       return false;
     }
@@ -455,9 +458,11 @@ async function main() {
 
   const payoff_steps: PayoffStep[] = [];
 
+  const payoff_ns: Record<string, number> = {};
+
   // first we pay off each debt
   let n = 0;
-  let snowball = 0;
+  let snowball = 150_000;
   for (const month of generate_months()) {
     if (process.env.VERBOSE) {
       console.log(`----------------------\nMonth ${month} (${n})`);
@@ -470,8 +475,18 @@ async function main() {
     }
 
     // payoffOrder = calc_payoff_order(payoffDebts);
+    payoffOrder = payoffOrder.filter((debt) => {
+      const debt2 = payoffDebts.find((d2) => d2.name === debt.name);
+      if (!debt2) {
+        throw new Error();
+      }
+      return Math.abs(debt2.true_balance) > 0;
+    });
     if (process.env.VERBOSE) {
-      console.log(`-> Next priority debt ${payoffOrder[0].name}`);
+      // console.log(`-> Next priority debt ${payoffOrder[0].name}`);
+      console.log(
+        `-> Snowball order: ${payoffOrder.map((debt) => debt.name).join(", ")}`
+      );
     }
 
     let total_payments = 0;
@@ -483,7 +498,9 @@ async function main() {
     payoffDebts.forEach((debt, i) => {
       if (debt.true_balance < 0) {
         const { payment } = debt;
-        const snowball_applied = is_next_priority_debt(debt) ? snowball : 0;
+        const snowball_applied = is_next_priority_debt(payoffOrder, debt)
+          ? snowball
+          : 0;
         const total_payment = payment + snowball_applied + carry_over;
         const new_balance = Math.min(0, debt.true_balance + total_payment);
 
@@ -520,6 +537,7 @@ async function main() {
 
         carry_over = carry_over_out;
 
+        // handle a debt being paid off
         if (new_balance === 0 && debt.true_balance < 0) {
           if (process.env.VERBOSE) {
             console.log(
@@ -529,9 +547,8 @@ async function main() {
             );
           }
           snowball += payment;
-          // if (debts[i].payoff_n > n) {
           debts[i].payoff_n = n;
-          //   }
+          payoff_ns[debts[i].name] = n;
         }
         debt.true_balance = new_balance;
 
@@ -571,6 +588,14 @@ async function main() {
     }
   }
 
+  // sort debts by payoff_ns
+  const payoff_steps2 = lodash.cloneDeep(payoff_steps).map((step) => {
+    step.debts = step.debts.sort((a, b) => {
+      return payoff_ns[a.name] - payoff_ns[b.name];
+    });
+    return step;
+  });
+
   console.log("Payoff Plan");
   console.log(
     table(
@@ -578,13 +603,13 @@ async function main() {
         [
           "n",
           "month",
-          ...payoff_steps[0].debts.map((d) => d.name),
+          ...payoff_steps2[0].debts.map((d) => d.name),
           "req_payments",
           "snowball",
           "total_payments",
           "total_debt",
         ].map((h) => colors.dim(h)),
-        ...payoff_steps.map((step) => {
+        ...payoff_steps2.map((step) => {
           return [
             step.n,
             step.month,
@@ -604,7 +629,7 @@ async function main() {
               const carry_out =
                 d.carryover_out > 0 ? `\n${fmt(d.carryover_out)} over ` : "";
 
-              return `${d.name}\n ${fmt(d.balance)} bal  \n${colors.dim(
+              return ` ${fmt(d.balance)} bal  \n${colors.dim(
                 pay_str
               )}${colors.dim(snowball_str)}${colors.dim(
                 carry_in_str
@@ -625,7 +650,7 @@ async function main() {
           {
             alignment: "right",
           },
-          ...payoff_steps[0].debts.map(() => {
+          ...payoff_steps2[0].debts.map(() => {
             return {
               alignment: "right",
             };

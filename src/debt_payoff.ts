@@ -306,7 +306,7 @@ async function main() {
       return {
         name: debt.name,
         interest_rate: debt.interest_rate,
-        payment: debt.min_payment,
+        payment: (debt as CreditCard).snowball ?? debt.min_payment,
         true_balance: debt.true_balance,
         monthly_interest: debt.true_balance * (debt.interest_rate / 12),
         snowball: (debt as any).snowball ?? 0,
@@ -495,7 +495,8 @@ async function main() {
 
     const snowball_start = snowball;
     let carry_over = 0;
-    payoffDebts.forEach((debt, i) => {
+    const payoffDebtsSorted = payoffDebts.sort(PAYOFF_STRATEGY_SORT);
+    payoffDebtsSorted.forEach((debt, i) => {
       if (debt.true_balance < 0) {
         const { payment } = debt;
         const snowball_applied = is_next_priority_debt(payoffOrder, debt)
@@ -547,8 +548,8 @@ async function main() {
             );
           }
           snowball += payment;
-          debts[i].payoff_n = n;
-          payoff_ns[debts[i].name] = n;
+          payoffDebtsSorted[i].payoff_n = n;
+          payoff_ns[payoffDebtsSorted[i].name] = n;
         }
         debt.true_balance = new_balance;
 

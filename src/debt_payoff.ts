@@ -177,7 +177,7 @@ async function main() {
             for_payment: category.balance,
             min_payment,
             true_balance: account.balance + category.balance,
-            interest_rate: my_account_info.interest_rate,
+            interest_rate: my_account_info.interest_rate ?? 0,
             snowball: category.budgeted,
             // category,
           };
@@ -403,7 +403,9 @@ async function main() {
     return b.interest_rate - a.interest_rate;
   };
 
-  const PAYOFF_STRATEGY_SORT = smartSnowballSort;
+  const PAYOFF_STRATEGY_SORT = dumbSnowballSort;
+  // const PAYOFF_STRATEGY_SORT = smartSnowballSort;
+  // const PAYOFF_STRATEGY_SORT = monthlyInterestSort;
   // const PAYOFF_STRATEGY_SORT = interestRateSort;
 
   /**
@@ -497,12 +499,23 @@ async function main() {
     let carry_over = 0;
     const payoffDebtsSorted = payoffDebts.sort(PAYOFF_STRATEGY_SORT);
     payoffDebtsSorted.forEach((debt, i) => {
+      let my_account_debt = my_accounts[debt.name];
+
+      const get_allow_overpay = () => {
+        if (my_account_debt?.disallow_overpay) return false;
+        return true;
+      };
+
       if (debt.true_balance < 0) {
         const { payment } = debt;
-        const snowball_applied = is_next_priority_debt(payoffOrder, debt)
-          ? snowball
-          : 0;
-        const total_payment = payment + snowball_applied + carry_over;
+        const allow_overpay = get_allow_overpay();
+        const snowball_applied =
+          allow_overpay && is_next_priority_debt(payoffOrder, debt)
+            ? snowball
+            : 0;
+        const total_payment = allow_overpay
+          ? payment + snowball_applied + carry_over
+          : payment;
         const new_balance = Math.min(0, debt.true_balance + total_payment);
 
         const carry_over_out =
@@ -513,7 +526,7 @@ async function main() {
         debt_payoff_records.push({
           name: debt.name,
           balance: debt.true_balance,
-          payment: payment,
+          payment: total_payment,
           snowball: snowball_applied,
           carryover: carry_over,
           carryover_out: carry_over_out,

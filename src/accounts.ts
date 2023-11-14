@@ -1,7 +1,8 @@
 interface MyAccount {
-  interest_rate: number;
+  interest_rate?: number;
   min_payment?: number;
   min_payment_rate?: number;
+  disallow_overpay?: boolean;
 }
 
 export const my_accounts: Record<string, MyAccount> = {
@@ -11,6 +12,7 @@ export const my_accounts: Record<string, MyAccount> = {
   Chase: { interest_rate: 0.2374, min_payment: 35_000 },
   "Citi Card": { interest_rate: 0.2399, min_payment: 167_080 },
   "PayPal Credit": { interest_rate: 0.1999, min_payment: 77_000 },
+  "Splice XO Rent-to-own": { disallow_overpay: true },
 };
 
 export function get_min_payment(account: MyAccount, balance: number): number {

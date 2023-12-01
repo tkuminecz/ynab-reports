@@ -251,9 +251,9 @@ async function main() {
             name: account.name,
             balance: account.balance,
             true_balance: account.balance,
-            min_payment: Object.values(
-              account.debt_minimum_payments ?? { payment: 0 }
-            )[0],
+            min_payment:
+              my_accounts[account.name]?.min_payment ??
+              Object.values(account.debt_minimum_payments ?? { payment: 0 })[0],
             interest_rate:
               Object.values(account.debt_interest_rates ?? { rate: 0 })[0] /
               100000,
@@ -434,7 +434,9 @@ async function main() {
     order: PayoffDebt[],
     debt: PayoffDebt
   ): boolean => {
-    const [first] = order; //.filter((debt) => debt.true_balance < 0);
+    const [first] = order.filter((d) => {
+      return !(my_accounts[d.name]?.disallow_overpay === true);
+    });
     if (!first) {
       return false;
     }
@@ -464,7 +466,7 @@ async function main() {
 
   // first we pay off each debt
   let n = 0;
-  let snowball = 150_000;
+  let snowball = 120_000;
   for (const month of generate_months()) {
     if (process.env.VERBOSE) {
       console.log(`----------------------\nMonth ${month} (${n})`);
@@ -526,13 +528,13 @@ async function main() {
         debt_payoff_records.push({
           name: debt.name,
           balance: debt.true_balance,
-          payment: total_payment,
+          payment: payment - carry_over_out,
           snowball: snowball_applied,
           carryover: carry_over,
           carryover_out: carry_over_out,
         });
 
-        total_payments += total_payment;
+        total_payments += total_payment - carry_over_out;
 
         const snowball_str =
           snowball_applied > 0 ? ` + ${fmt(snowball_applied)} snowball` : "";

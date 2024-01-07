@@ -1,113 +1,31 @@
 import * as ynab from "ynab";
 import colors from "colors";
 import lodash from "lodash";
-import {
-  ColumnUserConfig,
-  createStream as createTableStream,
-  table,
-} from "table";
+import { ColumnUserConfig, table } from "table";
 import { Redis } from "@upstash/redis";
 import { get_min_payment, my_accounts } from "./accounts";
-import { inspect } from "util";
+import {
+  fmt,
+  generate_months,
+  getPreviousMonth,
+  fetchAccounts,
+  fetchCategories,
+  fetchCategoryMonth,
+} from "./utils";
 
 const budget_id = process.env.YNAB_BUDGET_ID!;
 
 const redis = new Redis({
-  url: "https://us1-dashing-owl-39564.upstash.io",
-  token:
-    "AZqMASQgOTk2MTM2MTgtZDNmYi00ODI5LWJmZmYtM2MwYmQxYjQ4NzBkZDdmMDZjYTUzMTZiNDI5YTlmYWJjNDk2ZDkzODc0MjU=",
+  url: process.env.UPSTASH_REDIS_URL!,
+  token: process.env.UPSTASH_REDIS_TOKEN!,
 });
 
 const ynabApi = new ynab.API(process.env.YNAB_AUTH_TOKEN!);
-
-function fmt(amount: number): string {
-  const quantityInDollars = amount / 1000;
-  const roundedQuantity = Math.round(quantityInDollars * 100) / 100;
-  return roundedQuantity < 0
-    ? colors.red("-$" + Math.abs(roundedQuantity).toFixed(2))
-    : colors.green("$" + roundedQuantity.toFixed(2));
-}
-
-async function getCached<T>(
-  key: string,
-  ex: number,
-  fn: () => Promise<T>
-): Promise<T> {
-  let cached = await redis.get<T>(key);
-  if (!cached) {
-    cached = await fn();
-    redis.setex(key, ex, cached);
-  }
-  return cached;
-}
-
-async function fetchAccounts(): Promise<ynab.Account[]> {
-  const cache_key = `ynab:${budget_id}:accounts:2`;
-  const accountsResponse = await getCached(cache_key, 3600, async () => {
-    return ynabApi.accounts.getAccounts(budget_id);
-  });
-  return accountsResponse.data.accounts.filter(
-    (account) => account.deleted === false
-  );
-}
-
-async function fetchCategories(): Promise<ynab.Category[]> {
-  const cache_key = `ynab:${budget_id}:categories:1`;
-  const categoriesResponse = await getCached(cache_key, 3600, async () => {
-    return ynabApi.categories.getCategories(budget_id);
-  });
-  return categoriesResponse.data.category_groups.flatMap(
-    (group) => group.categories
-  );
-}
-
-async function fetchCategoryMonth(
-  category_id: string,
-  month: string
-): Promise<ynab.Category> {
-  const cache_key = `ynab:${budget_id}:category_month:${category_id}:${month}:1`;
-  const category = await getCached(cache_key, 3600, () =>
-    ynabApi.categories.getMonthCategoryById(budget_id, month, category_id)
-  );
-  return category.data.category;
-}
-
-function getPreviousMonth() {
-  const date = new Date();
-  date.setDate(1);
-  date.setMonth(date.getMonth() - 1);
-  const year = date.getFullYear();
-  const month = date.getMonth() + 1;
-  const monthStr = month < 10 ? "0" + month : month;
-  return `${year}-${monthStr}-01`;
-}
-
-function* generate_months() {
-  const date = new Date();
-  date.setDate(1);
-  date.setMonth(date.getMonth() + 1);
-
-  while (true) {
-    const year = date.getFullYear();
-    const month = date.getMonth() + 1; // JavaScript counts months from 0 to 11, so add 1 to get the correct month number
-    const month_str = month < 10 ? "0" + month : month;
-    yield `${year}-${month_str}-01`;
-
-    date.setMonth(date.getMonth() + 1); // Move to the next month
-  }
-}
 
 function calc_total_debt(debts: PayoffDebt[]): number {
   return debts.reduce((acc, debt) => {
     return acc + debt.true_balance;
   }, 0);
-}
-
-function apply_payment_to_debt(debt: PayoffDebt, payment: number): PayoffDebt {
-  return {
-    ...debt,
-    true_balance: debt.true_balance - payment,
-  };
 }
 
 interface BaseDebt {
@@ -142,8 +60,8 @@ interface PayoffDebt extends BaseDebt {
 }
 
 async function main() {
-  const accounts = await fetchAccounts();
-  const categories = await fetchCategories();
+  const accounts = await fetchAccounts(ynabApi, redis, budget_id);
+  const categories = await fetchCategories(ynabApi, redis, budget_id);
   const creditCards: CreditCard[] = (
     await Promise.all(
       accounts
@@ -156,6 +74,9 @@ async function main() {
           )!;
           const prevMonth = getPreviousMonth();
           const prevMonthCategory = await fetchCategoryMonth(
+            ynabApi,
+            redis,
+            budget_id,
             category.id,
             prevMonth
           );
@@ -466,7 +387,7 @@ async function main() {
 
   // first we pay off each debt
   let n = 0;
-  let snowball = 120_000;
+  let snowball = 90_000; // 120_000;
   for (const month of generate_months()) {
     if (process.env.VERBOSE) {
       console.log(`----------------------\nMonth ${month} (${n})`);

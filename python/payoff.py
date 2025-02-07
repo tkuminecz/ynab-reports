@@ -155,7 +155,7 @@ def get_snowball_increase(
     return paid_off_accounts["min_payment"].sum()
 
 
-def generate_payoff_plan(accounts_df, snowball_start, payoff_strategy):
+def generate_payoff_plan(accounts_df, snowball_start, snowball_inc, payoff_strategy):
     orig_total_balance = accounts_df["balance"].sum()
     curr_month = get_current_month()
     active_month = curr_month
@@ -224,7 +224,7 @@ def generate_payoff_plan(accounts_df, snowball_start, payoff_strategy):
 
         active_month = get_next_month(active_month)
         active_accounts_df = new_balances_df
-        active_snowball = active_snowball + snowball_increase
+        active_snowball = active_snowball + snowball_increase + snowball_inc
         cumulative_payments += total_payment
 
         if total_balance >= 0:
@@ -257,7 +257,9 @@ def payoff_plan_table(payoff_plan):
     return table_rows
 
 
-# -------------------------------
+#
+# ------------- main ------------------
+#
 
 
 def main():
@@ -278,6 +280,9 @@ def main():
             )
         st.dataframe(accounts_df, use_container_width=True)
         snowball_start = st.number_input("Snowball Start", value=100)
+        snowball_inc_per_month = st.number_input(
+            "Snowball Increase per month", value=0, step=5
+        )
 
         payoff_strategy_name = st.selectbox(
             "Payoff Strategy", valid_strategies, index=0
@@ -285,13 +290,20 @@ def main():
         payoff_strategy = get_payoff_strategy(payoff_strategy_name)
         # st.write(payoff_strategy)
 
-    payoff_plan = generate_payoff_plan(accounts_df, snowball_start, payoff_strategy)
+    payoff_plan = generate_payoff_plan(
+        accounts_df, snowball_start, snowball_inc_per_month, payoff_strategy
+    )
+
+    color_scheme = px.colors.qualitative.Plotly
 
     tab1, tab2 = st.tabs(["Payoff Plan", "Simulate Refinance"])
+
+    #
+    # -------------- payoff plan --------------
+    #
+
     with tab1:
         months = payoff_plan["months"]
-
-        # ---------- plot results ---------------
 
         col1, col2, col3 = st.columns(3)
         with col1:
@@ -326,12 +338,15 @@ def main():
                     "total_payments": [month["total_payment"] for month in months],
                 }
             )
-            fig = px.bar(
+            fig = px.line(
                 total_payments_df,
                 x="month",
                 y="total_payments",
-                title="Total payments over time",
+                markers=True,
+                title="Total Payments",
+                color_discrete_sequence=color_scheme,
             )
+            fig.update_yaxes(range=[0, total_payments_df["total_payments"].max() * 1.2])
             st.plotly_chart(fig, use_container_width=True)
 
             # plot total min_payment over time
@@ -347,7 +362,12 @@ def main():
                 total_min_payments_df,
                 x="month",
                 y="total_min_payments",
-                title="Total mininum payments over time",
+                markers=True,
+                title="Mininum Payments",
+                color_discrete_sequence=color_scheme,
+            )
+            fig.update_yaxes(
+                range=[0, total_min_payments_df["total_min_payments"].max() * 1.2]
             )
             st.plotly_chart(fig, use_container_width=True)
 
@@ -361,11 +381,13 @@ def main():
                     ],
                 }
             )
-            fig = px.bar(
+            fig = px.line(
                 total_balance_df,
                 x="month",
                 y="total_balance",
-                title="Total balance over time",
+                markers=True,
+                title="Total Balance",
+                color_discrete_sequence=color_scheme,
             )
             st.plotly_chart(fig, use_container_width=True)
 
@@ -377,8 +399,14 @@ def main():
                 }
             )
             fig = px.line(
-                snowball_df, x="month", y="snowball", title="Snowball over time"
+                snowball_df,
+                x="month",
+                y="snowball",
+                markers=True,
+                title="Snowball Size",
+                color_discrete_sequence=color_scheme,
             )
+            fig.update_yaxes(range=[0, snowball_df["snowball"].max() * 1.2])
             st.plotly_chart(fig, use_container_width=True)
 
         # plot individual balances over time
@@ -408,11 +436,16 @@ def main():
             y="balance",
             color="account",
             title="Balances over time",
+            color_discrete_sequence=color_scheme,
         )
         st.plotly_chart(fig, use_container_width=True)
 
         with st.expander("View payoff plan"):
             st.table(payoff_plan_table(payoff_plan))
+
+    #
+    # ----------- refinance simulation -----------------
+    #
 
     with tab2:
         refinance_csv_file = st.file_uploader(
@@ -438,6 +471,7 @@ def main():
         refi_payoff_plan = generate_payoff_plan(
             refinance_accounts_df,
             refi_snowball_start,
+            snowball_inc_per_month,
             payoff_strategy,
         )
 
@@ -509,8 +543,11 @@ def main():
                 x="month",
                 y="total_payments",
                 color="plan",
-                # barmode="group",
+                symbol="plan",
+                title="Total Payments",
+                color_discrete_sequence=color_scheme,
             )
+            fig.update_yaxes(range=[0, total_payments_df["total_payments"].max() * 1.2])
             st.plotly_chart(fig, use_container_width=True)
 
             total_min_payments_rows = []
@@ -536,6 +573,12 @@ def main():
                 x="month",
                 y="total_min_payments",
                 color="plan",
+                symbol="plan",
+                title="Minimum Payments",
+                color_discrete_sequence=color_scheme,
+            )
+            fig.update_yaxes(
+                range=[0, total_min_payments_df["total_min_payments"].max() * 1.2]
             )
             st.plotly_chart(fig, use_container_width=True)
 
@@ -563,7 +606,11 @@ def main():
                 x="month",
                 y="total_balance",
                 color="plan",
+                symbol="plan",
+                title="Total Balance",
+                color_discrete_sequence=color_scheme,
             )
+            fig.update_yaxes(range=[0, total_balance_df["total_balance"].max() * 1.2])
             st.plotly_chart(fig, use_container_width=True)
 
             # plot snowball over time
@@ -585,7 +632,16 @@ def main():
                     }
                 )
             snowball_df = pd.DataFrame(snowball_rows)
-            fig = px.line(snowball_df, x="month", y="snowball", color="plan")
+            fig = px.line(
+                snowball_df,
+                x="month",
+                y="snowball",
+                color="plan",
+                symbol="plan",
+                title="Snowball Size",
+                color_discrete_sequence=color_scheme,
+            )
+            fig.update_yaxes(range=[0, snowball_df["snowball"].max() * 1.2])
             st.plotly_chart(fig, use_container_width=True)
 
         with st.expander("View refinance payoff plan"):

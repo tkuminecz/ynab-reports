@@ -8,16 +8,16 @@ interface MyAccount {
 export const my_accounts: Record<string, MyAccount> = {
   "Amex Blue": { interest_rate: 0.2924 },
   AppleCard: { interest_rate: 0.2199, min_payment: 0 },
-  "BoA Visa A 0114": { interest_rate: 0.1974, min_payment: 54_000 },
-  "BoA Visa B 2061": { interest_rate: 0.2074, min_payment: 206_000 },
+  "BoA Visa A 0114": { interest_rate: 0.1974, min_payment: 50_000 },
+  "BoA Visa B 2061": { interest_rate: 0.2074, min_payment: 50_000 },
   Chase: { interest_rate: 0.2374, min_payment: 35_000 },
   "Citi Card": { interest_rate: 0.2399, min_payment: 167_080 },
-  Discover: {},
-  "Kohl's": {},
-  Mattress: { min_payment: 115_000 },
+  Discover: { interest_rate: 0.19 },
+  Kohls: { interest_rate: 0.19 },
+  Mattress: { min_payment: 125_000 },
   "PayPal Credit": { interest_rate: 0.1999, min_payment: 77_000 },
   "Splice XO Rent-to-own": { disallow_overpay: true },
-  "Student Loan": { min_payment: 70_000 },
+  "Student Loan": { min_payment: 85_000 },
 };
 
 export function get_min_payment(account: MyAccount, balance: number): number {

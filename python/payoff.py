@@ -155,38 +155,9 @@ def get_snowball_increase(
     return paid_off_accounts["min_payment"].sum()
 
 
-# -------------------------------
-
-
-def main():
-    st.set_page_config(page_title="Payoff Simulator", page_icon="💰", layout="wide")
-    st.title("Payoff Simulator")
-
-    with st.sidebar:
-        csv_file = st.file_uploader("Upload CSV", type=["csv"])
-        if csv_file:
-            accounts_df = pd.read_csv(csv_file)
-        else:
-            accounts_df = pd.DataFrame(
-                columns=["account", "interest_rate", "balance", "min_payment"]
-            )
-        with st.expander("Edit data"):
-            accounts_df = st.data_editor(
-                accounts_df, num_rows="dynamic", use_container_width=True
-            )
-        st.dataframe(accounts_df, use_container_width=True)
-        snowball_start = st.number_input("Snowball Start", value=100)
-
-        curr_month = get_current_month()
-
-        payoff_strategy_name = st.selectbox(
-            "Payoff Strategy", valid_strategies, index=0
-        )
-        payoff_strategy = get_payoff_strategy(payoff_strategy_name)
-        st.write(payoff_strategy)
-
+def generate_payoff_plan(accounts_df, snowball_start, payoff_strategy):
     orig_total_balance = accounts_df["balance"].sum()
-
+    curr_month = get_current_month()
     active_month = curr_month
     active_accounts_df = accounts_df.copy()
     active_snowball = snowball_start
@@ -258,135 +229,367 @@ def main():
 
         if total_balance >= 0:
             break
+    return {
+        "months": months,
+        "orig_total_balance": orig_total_balance,
+        "cumulative_payments": cumulative_payments,
+        "n": n,
+    }
 
-    # ---------- plot results ---------------
 
-    col1, col2, col3 = st.columns(3)
-    with col1:
-        st.metric(label="Original Total Balance", value=f"${-orig_total_balance:,.2f}")
-    with col2:
-        st.metric(label="Total Payments", value=f"${cumulative_payments:,.2f}")
-    total_interest_paid = round(abs(orig_total_balance + cumulative_payments), 2)
-    if total_interest_paid > 0:
+def payoff_plan_table(payoff_plan):
+    table_rows = []
+    for month in payoff_plan["months"]:
+        row = {}
+        for index, account in month["payments"].iterrows():
+            if account["balance"] < 0:
+                row[account["account"]] = (
+                    f"{account['min_payment']:,.2f} min + {account['overflow']:,.2f} overflow + {account['snowball']:,.2f} snowball= {account['total_payment']:,.2f}"
+                )
+            else:
+                row[account["account"]] = ""
+        row["Min payments"] = f"${month['total_min_payments']:,.2f}"
+        row["Snowball"] = f"${month['snowball']:,.2f}"
+        row["Overflow"] = f"${month['total_overflow']:,.2f}"
+        row["Total payments"] = f"${month['total_payment']:,.2f}"
+        row["Total balance"] = f"${abs(month['new_balances']['balance'].sum()):,.2f}"
+        table_rows.append(row)
+    return table_rows
+
+
+# -------------------------------
+
+
+def main():
+    st.set_page_config(page_title="Payoff Simulator", page_icon="💰", layout="wide")
+    st.title("Payoff Simulator")
+
+    with st.sidebar:
+        csv_file = st.file_uploader("Upload CSV", type=["csv"])
+        if csv_file:
+            accounts_df = pd.read_csv(csv_file)
+        else:
+            accounts_df = pd.DataFrame(
+                columns=["account", "interest_rate", "balance", "min_payment"]
+            )
+        with st.expander("Edit data"):
+            accounts_df = st.data_editor(
+                accounts_df, num_rows="dynamic", use_container_width=True
+            )
+        st.dataframe(accounts_df, use_container_width=True)
+        snowball_start = st.number_input("Snowball Start", value=100)
+
+        payoff_strategy_name = st.selectbox(
+            "Payoff Strategy", valid_strategies, index=0
+        )
+        payoff_strategy = get_payoff_strategy(payoff_strategy_name)
+        # st.write(payoff_strategy)
+
+    payoff_plan = generate_payoff_plan(accounts_df, snowball_start, payoff_strategy)
+
+    tab1, tab2 = st.tabs(["Payoff Plan", "Simulate Refinance"])
+    with tab1:
+        months = payoff_plan["months"]
+
+        # ---------- plot results ---------------
+
+        col1, col2, col3 = st.columns(3)
+        with col1:
+            orig_total_balance = payoff_plan["orig_total_balance"]
+            st.metric(
+                label="Original Total Balance", value=f"${-orig_total_balance:,.2f}"
+            )
         with col2:
             st.metric(
-                label="Total Interest Paid",
-                value=f"${abs(orig_total_balance + cumulative_payments):,.2f}",
+                label="Total Payments",
+                value=f"${payoff_plan['cumulative_payments']:,.2f}",
             )
-    with col3:
-        st.metric(label="Payoff time", value=f"{n} months")
-
-    col1, col2 = st.columns(2)
-
-    with col1:
-        # plot total payments over time
-        total_payments_df = pd.DataFrame(
-            {
-                "month": [str(month["month"]) for month in months],
-                "total_payments": [month["total_payment"] for month in months],
-            }
+        total_interest_paid = round(
+            abs(orig_total_balance + payoff_plan["cumulative_payments"]), 2
         )
-        fig = px.bar(
-            total_payments_df,
-            x="month",
-            y="total_payments",
-            title="Total payments over time",
-        )
-        st.plotly_chart(fig, use_container_width=True)
+        if total_interest_paid > 0:
+            with col2:
+                st.metric(
+                    label="Total Interest Paid",
+                    value=f"${abs(orig_total_balance + cumulative_payments):,.2f}",
+                )
+        with col3:
+            st.metric(label="Payoff time", value=f"{payoff_plan['n']} months")
 
-        # plot total min_payment over time
-        total_min_payments_df = pd.DataFrame(
-            {
-                "month": [str(month["month"]) for month in months],
-                "total_min_payments": [month["total_min_payments"] for month in months],
-            }
-        )
+        col1, col2 = st.columns(2)
+
+        with col1:
+            # plot total payments over time
+            total_payments_df = pd.DataFrame(
+                {
+                    "month": [str(month["month"]) for month in months],
+                    "total_payments": [month["total_payment"] for month in months],
+                }
+            )
+            fig = px.bar(
+                total_payments_df,
+                x="month",
+                y="total_payments",
+                title="Total payments over time",
+            )
+            st.plotly_chart(fig, use_container_width=True)
+
+            # plot total min_payment over time
+            total_min_payments_df = pd.DataFrame(
+                {
+                    "month": [str(month["month"]) for month in months],
+                    "total_min_payments": [
+                        month["total_min_payments"] for month in months
+                    ],
+                }
+            )
+            fig = px.line(
+                total_min_payments_df,
+                x="month",
+                y="total_min_payments",
+                title="Total mininum payments over time",
+            )
+            st.plotly_chart(fig, use_container_width=True)
+
+        with col2:
+            # plot total balance over time
+            total_balance_df = pd.DataFrame(
+                {
+                    "month": [str(month["month"]) for month in months],
+                    "total_balance": [
+                        -month["new_balances"]["balance"].sum() for month in months
+                    ],
+                }
+            )
+            fig = px.bar(
+                total_balance_df,
+                x="month",
+                y="total_balance",
+                title="Total balance over time",
+            )
+            st.plotly_chart(fig, use_container_width=True)
+
+            # plot snowball over time
+            snowball_df = pd.DataFrame(
+                {
+                    "month": [str(month["month"]) for month in months],
+                    "snowball": [month["snowball"] for month in months],
+                }
+            )
+            fig = px.line(
+                snowball_df, x="month", y="snowball", title="Snowball over time"
+            )
+            st.plotly_chart(fig, use_container_width=True)
+
+        # plot individual balances over time
+        balance_rows = []
+        include_total_balance = st.toggle("Include total balance", value=False)
+        for month in months:
+            for index, row in month["new_balances"].iterrows():
+                balance_rows.append(
+                    {
+                        "month": str(month["month"]),
+                        "account": row["account"],
+                        "balance": -row["balance"],
+                    }
+                )
+            if include_total_balance:
+                balance_rows.append(
+                    {
+                        "month": str(month["month"]),
+                        "account": "Total Balance",
+                        "balance": -month["new_balances"]["balance"].sum(),
+                    }
+                )
+        total_balance_df = pd.DataFrame(balance_rows)
         fig = px.line(
-            total_min_payments_df,
-            x="month",
-            y="total_min_payments",
-            title="Total mininum payments over time",
-        )
-        st.plotly_chart(fig, use_container_width=True)
-
-    with col2:
-        # plot total balance over time
-        total_balance_df = pd.DataFrame(
-            {
-                "month": [str(month["month"]) for month in months],
-                "total_balance": [
-                    -month["new_balances"]["balance"].sum() for month in months
-                ],
-            }
-        )
-        fig = px.bar(
             total_balance_df,
             x="month",
-            y="total_balance",
-            title="Total balance over time",
+            y="balance",
+            color="account",
+            title="Balances over time",
         )
         st.plotly_chart(fig, use_container_width=True)
 
-        # plot snowball over time
-        snowball_df = pd.DataFrame(
-            {
-                "month": [str(month["month"]) for month in months],
-                "snowball": [month["snowball"] for month in months],
-            }
+        with st.expander("View payoff plan"):
+            st.table(payoff_plan_table(payoff_plan))
+
+    with tab2:
+        refinance_csv_file = st.file_uploader(
+            "Upload CSV with refinanced accounts", type=["csv"]
         )
-        fig = px.line(snowball_df, x="month", y="snowball", title="Snowball over time")
-        st.plotly_chart(fig, use_container_width=True)
+        if refinance_csv_file:
+            refinance_accounts_df = pd.read_csv(refinance_csv_file)
+        else:
+            refinance_accounts_df = pd.DataFrame(
+                columns=["account", "interest_rate", "balance", "min_payment"]
+            )
+        with st.expander("Edit data"):
+            refinance_accounts_df = st.data_editor(
+                refinance_accounts_df, num_rows="dynamic", use_container_width=True
+            )
+        if len(refinance_accounts_df) == 0:
+            st.error("Please specify some refinanced accounts")
+            st.stop()
 
-    # plot individual balances over time
-    balance_rows = []
-    include_total_balance = st.toggle("Include total balance", value=False)
-    for month in months:
-        for index, row in month["new_balances"].iterrows():
-            balance_rows.append(
-                {
-                    "month": str(month["month"]),
-                    "account": row["account"],
-                    "balance": -row["balance"],
-                }
-            )
-        if include_total_balance:
-            balance_rows.append(
-                {
-                    "month": str(month["month"]),
-                    "account": "Total Balance",
-                    "balance": -month["new_balances"]["balance"].sum(),
-                }
-            )
-    total_balance_df = pd.DataFrame(balance_rows)
-    fig = px.line(
-        total_balance_df,
-        x="month",
-        y="balance",
-        color="account",
-        title="Balances over time",
-    )
-    st.plotly_chart(fig, use_container_width=True)
+        refi_snowball_start = st.number_input(
+            "Refinance Snowball Start", value=snowball_start, step=50
+        )
+        refi_payoff_plan = generate_payoff_plan(
+            refinance_accounts_df,
+            refi_snowball_start,
+            payoff_strategy,
+        )
 
-    with st.expander("View payoff plan"):
-        table_rows = []
-        for month in months:
-            row = {}
-            for index, account in month["payments"].iterrows():
-                if account["balance"] < 0:
-                    row[account["account"]] = (
-                        f"{account['min_payment']:,.2f} min + {account['overflow']:,.2f} overflow + {account['snowball']:,.2f} snowball= {account['total_payment']:,.2f}"
-                    )
-                else:
-                    row[account["account"]] = ""
-            row["Min payments"] = f"${month['total_min_payments']:,.2f}"
-            row["Snowball"] = f"${month['snowball']:,.2f}"
-            row["Overflow"] = f"${month['total_overflow']:,.2f}"
-            row["Total payments"] = f"${month['total_payment']:,.2f}"
-            row["Total balance"] = (
-                f"${abs(month['new_balances']['balance'].sum()):,.2f}"
+        col1, col2, col3 = st.columns(3)
+        with col1:
+            refi_orig_total_balance = refi_payoff_plan["orig_total_balance"]
+            total_balance_delta = orig_total_balance - refi_orig_total_balance
+            st.metric(
+                label="Original Total Balance",
+                value=f"{-refi_orig_total_balance:,.2f}",
+                delta=f"{total_balance_delta:,.2f}",
+                delta_color="inverse",
             )
-            table_rows.append(row)
-        st.table(table_rows)
+        with col2:
+            cumulative_payments_delta = (
+                refi_payoff_plan["cumulative_payments"]
+                - payoff_plan["cumulative_payments"]
+            )
+            st.metric(
+                label="Refi Total Payments",
+                value=f"{refi_payoff_plan['cumulative_payments']:,.2f}",
+                delta=f"{cumulative_payments_delta:,.2f}",
+                delta_color="inverse",
+            )
+        total_interest_paid = round(
+            abs(
+                refi_payoff_plan["orig_total_balance"]
+                + refi_payoff_plan["cumulative_payments"]
+            ),
+            2,
+        )
+        if total_interest_paid > 0:
+            with col2:
+                st.metric(
+                    label="Total Interest Paid",
+                    value=f"${abs(orig_total_balance + refi_payoff_plan['cumulative_payments']):,.2f}",
+                )
+        with col3:
+            payoff_time_delta = refi_payoff_plan["n"] - payoff_plan["n"]
+            st.metric(
+                label="Months to pay off",
+                value=f"{refi_payoff_plan['n']}",
+                delta=f"{payoff_time_delta}",
+                delta_color="inverse",
+            )
+
+        col1, col2 = st.columns(2)
+        with col1:
+            total_payments_rows = []
+            for month in payoff_plan["months"]:
+                total_payments_rows.append(
+                    {
+                        "month": str(month["month"]),
+                        "total_payments": month["total_payment"],
+                        "plan": "original",
+                    }
+                )
+            for month in refi_payoff_plan["months"]:
+                total_payments_rows.append(
+                    {
+                        "month": str(month["month"]),
+                        "total_payments": month["total_payment"],
+                        "plan": "refinance",
+                    }
+                )
+            total_payments_df = pd.DataFrame(total_payments_rows)
+            fig = px.line(
+                total_payments_df,
+                x="month",
+                y="total_payments",
+                color="plan",
+                # barmode="group",
+            )
+            st.plotly_chart(fig, use_container_width=True)
+
+            total_min_payments_rows = []
+            for month in payoff_plan["months"]:
+                total_min_payments_rows.append(
+                    {
+                        "month": str(month["month"]),
+                        "total_min_payments": month["total_min_payments"],
+                        "plan": "original",
+                    }
+                )
+            for month in refi_payoff_plan["months"]:
+                total_min_payments_rows.append(
+                    {
+                        "month": str(month["month"]),
+                        "total_min_payments": month["total_min_payments"],
+                        "plan": "refinance",
+                    }
+                )
+            total_min_payments_df = pd.DataFrame(total_min_payments_rows)
+            fig = px.line(
+                total_min_payments_df,
+                x="month",
+                y="total_min_payments",
+                color="plan",
+            )
+            st.plotly_chart(fig, use_container_width=True)
+
+        with col2:
+            total_balance_rows = []
+            for month in payoff_plan["months"]:
+                total_balance_rows.append(
+                    {
+                        "month": str(month["month"]),
+                        "total_balance": -month["new_balances"]["balance"].sum(),
+                        "plan": "original",
+                    }
+                )
+            for month in refi_payoff_plan["months"]:
+                total_balance_rows.append(
+                    {
+                        "month": str(month["month"]),
+                        "total_balance": -month["new_balances"]["balance"].sum(),
+                        "plan": "refinance",
+                    }
+                )
+            total_balance_df = pd.DataFrame(total_balance_rows)
+            fig = px.line(
+                total_balance_df,
+                x="month",
+                y="total_balance",
+                color="plan",
+            )
+            st.plotly_chart(fig, use_container_width=True)
+
+            # plot snowball over time
+            snowball_rows = []
+            for month in payoff_plan["months"]:
+                snowball_rows.append(
+                    {
+                        "month": str(month["month"]),
+                        "snowball": month["snowball"],
+                        "plan": "original",
+                    }
+                )
+            for month in refi_payoff_plan["months"]:
+                snowball_rows.append(
+                    {
+                        "month": str(month["month"]),
+                        "snowball": month["snowball"],
+                        "plan": "refinance",
+                    }
+                )
+            snowball_df = pd.DataFrame(snowball_rows)
+            fig = px.line(snowball_df, x="month", y="snowball", color="plan")
+            st.plotly_chart(fig, use_container_width=True)
+
+        with st.expander("View refinance payoff plan"):
+            st.table(payoff_plan_table(refi_payoff_plan))
 
 
 if __name__ == "__main__":

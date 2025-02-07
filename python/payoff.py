@@ -33,11 +33,11 @@ class InterestRateSnowball(PayoffStrategy):
         return accounts_df.copy().sort_values("interest_rate", ascending=False)
 
 
-valid_strategies = ["dumb", "interest_rate", "smart"]
+valid_strategies = ["lowest_balance", "interest_rate", "smart"]
 
 
 def get_payoff_strategy(strategy_name: str) -> PayoffStrategy:
-    if strategy_name == "dumb":
+    if strategy_name == "lowest_balance":
         return DumbSnowball()
     elif strategy_name == "interest_rate":
         return InterestRateSnowball()
@@ -195,14 +195,14 @@ def main():
     months = []
     while True:
         n += 1
-        st.header(f"Month {n}: {active_month}")
+        # st.header(f"Month {n}: {active_month}")
         ordering_for_month = payoff_strategy.get_ordering(active_accounts_df)
         monthly_payments = calculate_month_payments(ordering_for_month, active_snowball)
         new_balances_df = get_new_balances(active_accounts_df, monthly_payments)
-        st.write(
-            monthly_payments,
-            # new_balances_df.copy().drop(columns=["interest_rate", "min_payment"]),
-        )
+        # st.write(
+        #     monthly_payments,
+        #     # new_balances_df.copy().drop(columns=["interest_rate", "min_payment"]),
+        # )
         total_min_payments = sum(
             [
                 acc["min_payment"]
@@ -211,37 +211,39 @@ def main():
             ]
         )
         total_snowball = monthly_payments["snowball"].sum()
+        total_overflow = monthly_payments["overflow"].sum()
         total_payment = monthly_payments["total_payment"].sum()
         total_balance = new_balances_df["balance"].sum()
         snowball_increase = get_snowball_increase(active_accounts_df, monthly_payments)
-        st.table(
-            [
-                {
-                    "total min payments": total_min_payments,
-                    "total snowball": total_snowball,
-                    "total payments": total_payment,
-                    "remaining balance": total_balance,
-                }
-            ]
-        )
+        # st.table(
+        #     [
+        #         {
+        #             "total min payments": total_min_payments,
+        #             "total snowball": total_snowball,
+        #             "total payments": total_payment,
+        #             "remaining balance": total_balance,
+        #         }
+        #     ]
+        # )
 
         paid_off_this_month = get_paid_off_accounts_this_round(
             active_accounts_df, monthly_payments
         )
-        for index, row in paid_off_this_month.iterrows():
-            st.write(f"-> Paid off {row['account']}!")
-        if snowball_increase > 0:
-            st.write(
-                f"-> Snowball increased by ${snowball_increase:,.2f}! -> {active_snowball + snowball_increase:,.2f}"
-            )
+        # for index, row in paid_off_this_month.iterrows():
+        # st.write(f"-> Paid off {row['account']}!")
+        # if snowball_increase > 0:
+        # st.write(
+        #     f"-> Snowball increased by ${snowball_increase:,.2f}! -> {active_snowball + snowball_increase:,.2f}"
+        # )
 
-        st.divider()
+        # st.divider()
 
         months.append(
             {
                 "accounts": active_accounts_df,
                 "month": active_month,
                 "snowball": active_snowball,
+                "total_overflow": total_overflow,
                 "payments": monthly_payments,
                 "total_min_payments": total_min_payments,
                 "total_payment": total_payment,
@@ -256,6 +258,8 @@ def main():
 
         if total_balance >= 0:
             break
+
+    # ---------- plot results ---------------
 
     col1, col2, col3 = st.columns(3)
     with col1:
@@ -332,6 +336,57 @@ def main():
         )
         fig = px.line(snowball_df, x="month", y="snowball", title="Snowball over time")
         st.plotly_chart(fig, use_container_width=True)
+
+    # plot individual balances over time
+    balance_rows = []
+    include_total_balance = st.toggle("Include total balance", value=False)
+    for month in months:
+        for index, row in month["new_balances"].iterrows():
+            balance_rows.append(
+                {
+                    "month": str(month["month"]),
+                    "account": row["account"],
+                    "balance": -row["balance"],
+                }
+            )
+        if include_total_balance:
+            balance_rows.append(
+                {
+                    "month": str(month["month"]),
+                    "account": "Total Balance",
+                    "balance": -month["new_balances"]["balance"].sum(),
+                }
+            )
+    total_balance_df = pd.DataFrame(balance_rows)
+    fig = px.line(
+        total_balance_df,
+        x="month",
+        y="balance",
+        color="account",
+        title="Balances over time",
+    )
+    st.plotly_chart(fig, use_container_width=True)
+
+    with st.expander("View payoff plan"):
+        table_rows = []
+        for month in months:
+            row = {}
+            for index, account in month["payments"].iterrows():
+                if account["balance"] < 0:
+                    row[account["account"]] = (
+                        f"{account['min_payment']:,.2f} min + {account['overflow']:,.2f} overflow + {account['snowball']:,.2f} snowball= {account['total_payment']:,.2f}"
+                    )
+                else:
+                    row[account["account"]] = ""
+            row["Min payments"] = f"${month['total_min_payments']:,.2f}"
+            row["Snowball"] = f"${month['snowball']:,.2f}"
+            row["Overflow"] = f"${month['total_overflow']:,.2f}"
+            row["Total payments"] = f"${month['total_payment']:,.2f}"
+            row["Total balance"] = (
+                f"${abs(month['new_balances']['balance'].sum()):,.2f}"
+            )
+            table_rows.append(row)
+        st.table(table_rows)
 
 
 if __name__ == "__main__":

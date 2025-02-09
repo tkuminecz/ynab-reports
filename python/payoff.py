@@ -128,13 +128,31 @@ def get_new_balances(
     accounts_df: pd.DataFrame, payments_df: pd.DataFrame
 ) -> pd.DataFrame:
     new_accounts_df = accounts_df.copy()
+    # st.write(new_accounts_df, payments_df)
     for index, row in payments_df.iterrows():
         account = row["account"]
         total_payment = row["total_payment"]
-        new_balance = (
-            accounts_df.loc[accounts_df["account"] == account, "balance"].iloc[0]
-            + total_payment
-        )
+        old_balance = accounts_df.loc[
+            accounts_df["account"] == account, "balance"
+        ].iloc[0]
+        interest_rate = new_accounts_df.loc[
+            new_accounts_df["account"] == account, "interest_rate"
+        ].iloc[0]
+        if old_balance + total_payment >= 0:
+            interest = 0
+        else:
+            interest = -old_balance * (interest_rate / 12)
+        principal_payment = total_payment - interest
+        new_balance = old_balance + principal_payment
+        # st.write(
+        #     account,
+        #     old_balance,
+        #     interest_rate,
+        #     total_payment,
+        #     interest,
+        #     principal_payment,
+        #     new_balance,
+        # )
         new_accounts_df.loc[new_accounts_df["account"] == account, "balance"] = (
             new_balance
         )
@@ -287,7 +305,7 @@ def main():
                 accounts_df, num_rows="dynamic", use_container_width=True
             )
         st.dataframe(accounts_df, use_container_width=True)
-        snowball_start = st.number_input("Snowball Start", value=100)
+        snowball_start = st.number_input("Snowball Start", value=100, step=50)
         snowball_inc_per_month = st.number_input(
             "Snowball Increase per month", value=0, step=5
         )
@@ -298,11 +316,15 @@ def main():
         payoff_strategy = get_payoff_strategy(payoff_strategy_name)
         # st.write(payoff_strategy)
 
+    if len(accounts_df) == 0:
+        st.error("Please specify some accounts")
+        st.stop()
+
     payoff_plan = generate_payoff_plan(
         accounts_df, snowball_start, snowball_inc_per_month, payoff_strategy
     )
 
-    color_scheme = px.colors.qualitative.Plotly
+    color_scheme = px.colors.qualitative.D3
 
     tab1, tab2 = st.tabs(["Payoff Plan", "Simulate Refinance"])
 
@@ -313,7 +335,7 @@ def main():
     with tab1:
         months = payoff_plan["months"]
 
-        col1, col2, col3 = st.columns(3)
+        col1, col2, col3, col4 = st.columns(4)
         with col1:
             orig_total_balance = payoff_plan["orig_total_balance"]
             st.metric(
@@ -327,13 +349,12 @@ def main():
         total_interest_paid = round(
             abs(orig_total_balance + payoff_plan["cumulative_payments"]), 2
         )
-        if total_interest_paid > 0:
-            with col2:
-                st.metric(
-                    label="Total Interest Paid",
-                    value=f"${abs(orig_total_balance + cumulative_payments):,.2f}",
-                )
         with col3:
+            st.metric(
+                label="Total Interest Paid",
+                value=f"${abs(orig_total_balance + payoff_plan['cumulative_payments']):,.2f}",
+            )
+        with col4:
             st.metric(label="Payoff time", value=f"{payoff_plan['n']} months")
 
         col1, col2 = st.columns(2)
@@ -484,12 +505,12 @@ def main():
             payoff_strategy,
         )
 
-        col1, col2, col3 = st.columns(3)
+        col1, col2, col3, col4 = st.columns(4)
         with col1:
             refi_orig_total_balance = refi_payoff_plan["orig_total_balance"]
             total_balance_delta = orig_total_balance - refi_orig_total_balance
             st.metric(
-                label="Original Total Balance",
+                label="Refi Total Balance",
                 value=f"{-refi_orig_total_balance:,.2f}",
                 delta=f"{total_balance_delta:,.2f}",
                 delta_color="inverse",
@@ -505,23 +526,25 @@ def main():
                 delta=f"{cumulative_payments_delta:,.2f}",
                 delta_color="inverse",
             )
-        total_interest_paid = round(
-            abs(
-                refi_payoff_plan["orig_total_balance"]
-                + refi_payoff_plan["cumulative_payments"]
-            ),
-            2,
-        )
-        if total_interest_paid > 0:
-            with col2:
-                st.metric(
-                    label="Total Interest Paid",
-                    value=f"${abs(orig_total_balance + refi_payoff_plan['cumulative_payments']):,.2f}",
-                )
         with col3:
+            refi_interest_paid = round(
+                abs(
+                    refi_payoff_plan["orig_total_balance"]
+                    + refi_payoff_plan["cumulative_payments"]
+                ),
+                2,
+            )
+            total_interest_paid_delta = refi_interest_paid - total_interest_paid
+            st.metric(
+                label="Refi Total Interest Paid",
+                value=f"{refi_interest_paid:,.2f}",
+                delta=f"{total_interest_paid_delta:,.2f}",
+                delta_color="inverse",
+            )
+        with col4:
             payoff_time_delta = refi_payoff_plan["n"] - payoff_plan["n"]
             st.metric(
-                label="Months to pay off",
+                label="Refi Months to pay off",
                 value=f"{refi_payoff_plan['n']}",
                 delta=f"{payoff_time_delta}",
                 delta_color="inverse",

@@ -61,7 +61,8 @@ def get_total_min_payments(accounts_df: pd.DataFrame) -> float:
 
 def calculate_month_payments(
     accounts_df: pd.DataFrame, snowball: float
-) -> pd.DataFrame:
+) -> (pd.DataFrame, list):
+    log = []
     rows = []
     snowball_left = snowball
     overflow = 0
@@ -69,31 +70,31 @@ def calculate_month_payments(
         account = row["account"]
         min_payment = row["min_payment"]
         balance = row["balance"]
-        # st.write(account)
-        # st.write("balance=", balance)
-        # st.write("min_payment=", min_payment)
-        # st.write("snowball_left=", snowball_left)
+        log.append(account)
+        log.append(f"balance = {balance}")
+        log.append(f"min_payment = {min_payment}")
+        log.append(f"snowball_left = {snowball_left}")
 
-        # st.write("overflow=", overflow)
-        # st.write("snowball_left=", snowball_left)
+        log.append(f"overflow = {overflow}")
+        log.append(f"snowball_left = {snowball_left}")
         balance_after_min_payment = balance + min_payment
-        # st.write("balance_after_min_payment=", balance_after_min_payment)
+        log.append(f"balance_after_min_payment = {balance_after_min_payment}")
         overflow_to_apply = 0
         if balance_after_min_payment < 0:
             overflow_to_apply = max(balance_after_min_payment, overflow)
-        # st.write("overflow_to_apply=", overflow_to_apply)
+        log.append(f"overflow_to_apply = {overflow_to_apply}")
 
         balance_after_overflow = balance_after_min_payment + overflow_to_apply
-        # st.write("balance_after_overflow=", balance_after_overflow)
+        log.append(f"balance_after_overflow = {balance_after_overflow}")
         snowball_to_apply = 0
         if balance_after_overflow < 0:
             snowball_to_apply = max(balance_after_overflow, snowball_left)
-        # st.write("snowball_to_apply=", snowball_to_apply)
+        log.append(f"snowball_to_apply = {snowball_to_apply}")
 
         total_payment = min(
             -balance, min_payment + overflow_to_apply + snowball_to_apply
         )
-        # st.write("total_payment=", total_payment)
+        log.append(f"total_payment = {total_payment}")
         rows.append(
             {
                 "account": account,
@@ -107,17 +108,20 @@ def calculate_month_payments(
         snowball_left = max(0, snowball_left - snowball_to_apply)
         overflow = min(0, overflow - overflow_to_apply)
         if total_payment < (min_payment + overflow_to_apply + snowball_to_apply):
+            log.append(f"increasing overflow from {overflow}")
             overflow += -(
                 total_payment - (min_payment + overflow_to_apply + snowball_to_apply)
             )
-        # st.write("->   overflow ->", overflow)
-        # st.write("->   snowball_left ->", snowball_left)
-        # st.divider()
+        if total_payment == 0:
+            overflow = 0
+        log.append(f"->   overflow -> {overflow}")
+        log.append(f"->   snowball_left -> {snowball_left}")
+        log.append("----------------")
 
     payment_df = pd.DataFrame(
         rows,
     )
-    return payment_df
+    return (payment_df, log)
 
 
 def get_new_balances(
@@ -157,7 +161,7 @@ def get_snowball_increase(
 
 def generate_payoff_plan(accounts_df, snowball_start, snowball_inc, payoff_strategy):
     orig_total_balance = accounts_df["balance"].sum()
-    curr_month = get_current_month()
+    curr_month = get_current_month() + 1
     active_month = curr_month
     active_accounts_df = accounts_df.copy()
     active_snowball = snowball_start
@@ -166,14 +170,15 @@ def generate_payoff_plan(accounts_df, snowball_start, snowball_inc, payoff_strat
     months = []
     while True:
         n += 1
-        # st.header(f"Month {n}: {active_month}")
+        log = []
+        log.append(f"Month {n}: {active_month}")
         ordering_for_month = payoff_strategy.get_ordering(active_accounts_df)
-        monthly_payments = calculate_month_payments(ordering_for_month, active_snowball)
+        monthly_payments, monthly_payments_log = calculate_month_payments(
+            ordering_for_month, active_snowball
+        )
+        log.append(monthly_payments_log)
         new_balances_df = get_new_balances(active_accounts_df, monthly_payments)
-        # st.write(
-        #     monthly_payments,
-        #     # new_balances_df.copy().drop(columns=["interest_rate", "min_payment"]),
-        # )
+
         total_min_payments = sum(
             [
                 acc["min_payment"]
@@ -219,6 +224,7 @@ def generate_payoff_plan(accounts_df, snowball_start, snowball_inc, payoff_strat
                 "total_min_payments": total_min_payments,
                 "total_payment": total_payment,
                 "new_balances": new_balances_df,
+                "log": log,
             }
         )
 
@@ -241,16 +247,18 @@ def payoff_plan_table(payoff_plan):
     table_rows = []
     for month in payoff_plan["months"]:
         row = {}
+        row["Month"] = month["month"]
         for index, account in month["payments"].iterrows():
             if account["balance"] < 0:
-                row[account["account"]] = (
-                    f"{account['min_payment']:,.2f} min + {account['overflow']:,.2f} overflow + {account['snowball']:,.2f} snowball= {account['total_payment']:,.2f}"
-                )
+                # row[account["account"]] = (
+                #     f"{account['min_payment']:,.2f} min + {account['overflow']:,.2f} overflow + {account['snowball']:,.2f} snowball= {account['total_payment']:,.2f}"
+                # )
+                row[account["account"]] = f"${account['total_payment']:,.2f}"
             else:
                 row[account["account"]] = ""
         row["Min payments"] = f"${month['total_min_payments']:,.2f}"
         row["Snowball"] = f"${month['snowball']:,.2f}"
-        row["Overflow"] = f"${month['total_overflow']:,.2f}"
+        # row["Overflow"] = f"${month['total_overflow']:,.2f}"
         row["Total payments"] = f"${month['total_payment']:,.2f}"
         row["Total balance"] = f"${abs(month['new_balances']['balance'].sum()):,.2f}"
         table_rows.append(row)
@@ -435,7 +443,8 @@ def main():
             x="month",
             y="balance",
             color="account",
-            title="Balances over time",
+            symbol="account",
+            title="Account Balances",
             color_discrete_sequence=color_scheme,
         )
         st.plotly_chart(fig, use_container_width=True)
@@ -645,7 +654,21 @@ def main():
             st.plotly_chart(fig, use_container_width=True)
 
         with st.expander("View refinance payoff plan"):
-            st.table(payoff_plan_table(refi_payoff_plan))
+            st.table(
+                payoff_plan_table(refi_payoff_plan),
+            )
+
+        with st.expander("View refinance payoff plan log"):
+            for month in refi_payoff_plan["months"]:
+                text = ""
+                for log in month["log"]:
+                    if type(log) == list:
+                        for l in log:
+                            text += f"{l}\n"
+                    else:
+                        text += f"{log}\n"
+                st.code(text)
+                # st.divider()
 
 
 if __name__ == "__main__":

@@ -1,6 +1,11 @@
+import os
+import math
+import re
+from typing import Optional
 import streamlit as st
 import pandas as pd
 import plotly.express as px
+from ynab_helpers import fetch_accounts, fetch_categories
 
 
 class PayoffStrategy(object):
@@ -33,7 +38,7 @@ class InterestRateSnowball(PayoffStrategy):
         return accounts_df.copy().sort_values("interest_rate", ascending=False)
 
 
-valid_strategies = ["lowest_balance", "interest_rate", "smart"]
+valid_strategies = ["smart", "lowest_balance", "interest_rate"]
 
 
 def get_payoff_strategy(strategy_name: str) -> PayoffStrategy:
@@ -53,6 +58,112 @@ def get_current_month():
 
 def get_next_month(current_month: str) -> str:
     return pd.Period(current_month) + 1
+
+
+def extract_interest_rate_from_note(note: Optional[str]) -> Optional[float]:
+    if note is None or len(note) == 0:
+        return None
+    # check for regex like like "interest_rate=0.1324"
+    rgex = r"interest_rate=(\d+\.\d+)"
+    match = re.search(rgex, note)
+    if match:
+        return float(match.group(1))
+    return None
+
+
+def extract_min_payment_from_note(note: Optional[str]) -> Optional[float]:
+    if note is None or len(note) == 0:
+        return None
+    # check for regex like like "min_payment=0.1324"
+    rgex = r"min_payment=(\d+\.\d+)"
+    match = re.search(rgex, note)
+    # st.write("extract", note, match)
+    if match:
+        # st.write("extracted", match.group(1))
+        return float(match.group(1))
+    return None
+
+
+def calc_cc_min_payment(
+    balance: float, interest_rate: float, note: Optional[str]
+) -> float:
+    min_payment_from_note = extract_min_payment_from_note(note)
+    if min_payment_from_note:
+        return min_payment_from_note
+    min_payment_minimum = -25
+    min_payment_percent = 0.01
+    if balance >= min_payment_minimum:
+        return balance
+    else:
+        return -1 * min(
+            min_payment_minimum, math.floor((balance / 1000) * min_payment_percent)
+        )
+
+
+@st.cache_data
+def fetch_debts_from_ynab():
+    ynab_auth_token = os.getenv("YNAB_AUTH_TOKEN")
+    ynab_budget_id = os.getenv("YNAB_BUDGET_ID")
+    accounts = fetch_accounts(ynab_auth_token, ynab_budget_id)
+    # st.write(accounts)
+    categories = fetch_categories(ynab_auth_token, ynab_budget_id)
+    # st.write(categories)
+
+    credit_card_accounts = [
+        account
+        for account in accounts
+        if account.type == "creditCard" and account.balance < 0
+    ]
+    # st.write([(cc.name, cc) for cc in credit_card_accounts])
+
+    loan_accounts = [
+        account
+        for account in accounts
+        if account.type
+        in ["autoLoan", "medicalDebt", "studentLoan", "personalLoan", "otherDebt"]
+        and account.closed == False
+    ]
+    # st.write([(loan.name, loan) for loan in loan_accounts])
+
+    debts = []
+
+    for account in credit_card_accounts:
+        if account.balance < 0:
+            # st.write(account)
+            category = next(
+                (category for category in categories if category.name == account.name)
+            )
+            # st.write(category)
+            maybe_interest_rate = extract_interest_rate_from_note(account.note)
+            interest_rate = maybe_interest_rate / 100 if maybe_interest_rate else 0.2
+            min_payment = calc_cc_min_payment(
+                account.balance, interest_rate, account.note
+            )
+            debts.append(
+                {
+                    "account": account.name,
+                    "interest_rate": interest_rate,
+                    "balance": (account.balance + category.balance) / 1000,
+                    "min_payment": min_payment,
+                }
+            )
+
+    for account in loan_accounts:
+        if account.balance < 0:
+            interest_rate_keys = account.debt_interest_rates.keys()
+            interest_rate = account.debt_interest_rates[list(interest_rate_keys)[0]]
+            min_payment_keys = account.debt_minimum_payments.keys()
+            min_payment = account.debt_minimum_payments[list(min_payment_keys)[0]]
+            debts.append(
+                {
+                    "account": account.name,
+                    "interest_rate": interest_rate / 1000 / 100,
+                    "balance": account.balance / 1000,
+                    "min_payment": min_payment / 1000,
+                }
+            )
+
+    return debts
 
 
 def get_total_min_payments(accounts_df: pd.DataFrame) -> float:
@@ -293,13 +404,17 @@ def main():
     st.title("Payoff Simulator")
 
     with st.sidebar:
+        accounts_df = pd.DataFrame(
+            columns=["account", "interest_rate", "balance", "min_payment"]
+        )
+
+        ynab_debts = fetch_debts_from_ynab()
+        accounts_df = pd.DataFrame(ynab_debts)
+
         csv_file = st.file_uploader("Upload CSV", type=["csv"])
         if csv_file:
             accounts_df = pd.read_csv(csv_file)
-        else:
-            accounts_df = pd.DataFrame(
-                columns=["account", "interest_rate", "balance", "min_payment"]
-            )
+
         with st.expander("Edit data"):
             accounts_df = st.data_editor(
                 accounts_df, num_rows="dynamic", use_container_width=True

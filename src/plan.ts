@@ -100,7 +100,7 @@ export function get_payoff_plan(
   debts: PayoffDebt[],
   payoffStrategy: PayoffStrategy = smartSnowballSort
 ) {
-  const INIT_SNOWBALL = 300_000; // 120_000;
+  const INIT_SNOWBALL = 500_000; // 120_000;
   const payoffDebts = lodash.cloneDeep(debts);
 
   // console.log("->payoff debts", payoffDebts);

@@ -441,7 +441,13 @@ def main():
 
     color_scheme = px.colors.qualitative.D3
 
-    tab1, tab2 = st.tabs(["Payoff Plan", "Simulate Refinance"])
+    tab1, tab2, tab3 = st.tabs(
+        [
+            "Payoff Plan",
+            "Simulate Plan Change",
+            "Simulate Refinance",
+        ]
+    )
 
     #
     # -------------- payoff plan --------------
@@ -589,78 +595,69 @@ def main():
             st.table(payoff_plan_table(payoff_plan))
 
     #
-    # ----------- refinance simulation -----------------
+    # ----------- change plan simulation -----------------
     #
 
     with tab2:
-        refinance_csv_file = st.file_uploader(
-            "Upload CSV with refinanced accounts", type=["csv"]
+        replan_account_df = accounts_df.copy()
+        replan_snowball_start = st.number_input(
+            "Replan Snowball Start", value=snowball_start, step=50
         )
-        if refinance_csv_file:
-            refinance_accounts_df = pd.read_csv(refinance_csv_file)
-        else:
-            refinance_accounts_df = pd.DataFrame(
-                columns=["account", "interest_rate", "balance", "min_payment"]
-            )
-        with st.expander("Edit data"):
-            refinance_accounts_df = st.data_editor(
-                refinance_accounts_df, num_rows="dynamic", use_container_width=True
-            )
-        if len(refinance_accounts_df) == 0:
-            st.error("Please specify some refinanced accounts")
-            st.stop()
-
-        refi_snowball_start = st.number_input(
-            "Refinance Snowball Start", value=snowball_start, step=50
+        replan_snowball_inc_per_month = st.number_input(
+            "Replan Snowball Increase per month", value=snowball_inc_per_month, step=5
         )
-        refi_payoff_plan = generate_payoff_plan(
-            refinance_accounts_df,
-            refi_snowball_start,
-            snowball_inc_per_month,
-            payoff_strategy,
+        replan_payoff_strategy_name = st.selectbox(
+            "Replan Payoff Strategy", valid_strategies, index=0
+        )
+        replan_payoff_strategy = get_payoff_strategy(replan_payoff_strategy_name)
+        replan_payoff_plan = generate_payoff_plan(
+            replan_account_df,
+            replan_snowball_start,
+            replan_snowball_inc_per_month,
+            replan_payoff_strategy,
         )
 
         col1, col2, col3, col4 = st.columns(4)
         with col1:
-            refi_orig_total_balance = refi_payoff_plan["orig_total_balance"]
+            refi_orig_total_balance = replan_payoff_plan["orig_total_balance"]
             total_balance_delta = orig_total_balance - refi_orig_total_balance
             st.metric(
-                label="Refi Total Balance",
+                label="Replan Total Balance",
                 value=f"{-refi_orig_total_balance:,.2f}",
                 delta=f"{total_balance_delta:,.2f}",
                 delta_color="inverse",
             )
         with col2:
             cumulative_payments_delta = (
-                refi_payoff_plan["cumulative_payments"]
+                replan_payoff_plan["cumulative_payments"]
                 - payoff_plan["cumulative_payments"]
             )
             st.metric(
-                label="Refi Total Payments",
-                value=f"{refi_payoff_plan['cumulative_payments']:,.2f}",
+                label="Replan Total Payments",
+                value=f"{replan_payoff_plan['cumulative_payments']:,.2f}",
                 delta=f"{cumulative_payments_delta:,.2f}",
                 delta_color="inverse",
             )
         with col3:
             refi_interest_paid = round(
                 abs(
-                    refi_payoff_plan["orig_total_balance"]
-                    + refi_payoff_plan["cumulative_payments"]
+                    replan_payoff_plan["orig_total_balance"]
+                    + replan_payoff_plan["cumulative_payments"]
                 ),
                 2,
             )
             total_interest_paid_delta = refi_interest_paid - total_interest_paid
             st.metric(
-                label="Refi Total Interest Paid",
+                label="Replan Total Interest Paid",
                 value=f"{refi_interest_paid:,.2f}",
                 delta=f"{total_interest_paid_delta:,.2f}",
                 delta_color="inverse",
             )
         with col4:
-            payoff_time_delta = refi_payoff_plan["n"] - payoff_plan["n"]
+            payoff_time_delta = replan_payoff_plan["n"] - payoff_plan["n"]
             st.metric(
-                label="Refi Months to pay off",
-                value=f"{refi_payoff_plan['n']}",
+                label="Replan Months to pay off",
+                value=f"{replan_payoff_plan['n']}",
                 delta=f"{payoff_time_delta}",
                 delta_color="inverse",
             )
@@ -676,7 +673,262 @@ def main():
                         "plan": "original",
                     }
                 )
-            for month in refi_payoff_plan["months"]:
+            for month in replan_payoff_plan["months"]:
+                total_payments_rows.append(
+                    {
+                        "month": str(month["month"]),
+                        "total_payments": month["total_payment"],
+                        "plan": "replan",
+                    }
+                )
+            total_payments_df = pd.DataFrame(total_payments_rows)
+            fig = px.line(
+                total_payments_df,
+                x="month",
+                y="total_payments",
+                color="plan",
+                symbol="plan",
+                title="Total Payments",
+                color_discrete_sequence=color_scheme,
+            )
+            fig.update_yaxes(range=[0, total_payments_df["total_payments"].max() * 1.2])
+            st.plotly_chart(fig, use_container_width=True)
+
+            total_min_payments_rows = []
+            for month in payoff_plan["months"]:
+                total_min_payments_rows.append(
+                    {
+                        "month": str(month["month"]),
+                        "total_min_payments": month["total_min_payments"],
+                        "plan": "original",
+                    }
+                )
+            for month in replan_payoff_plan["months"]:
+                total_min_payments_rows.append(
+                    {
+                        "month": str(month["month"]),
+                        "total_min_payments": month["total_min_payments"],
+                        "plan": "replan",
+                    }
+                )
+            total_min_payments_df = pd.DataFrame(total_min_payments_rows)
+            fig = px.line(
+                total_min_payments_df,
+                x="month",
+                y="total_min_payments",
+                color="plan",
+                symbol="plan",
+                title="Minimum Payments",
+                color_discrete_sequence=color_scheme,
+            )
+            fig.update_yaxes(
+                range=[0, total_min_payments_df["total_min_payments"].max() * 1.2]
+            )
+            st.plotly_chart(fig, use_container_width=True)
+
+        with col2:
+            total_balance_rows = []
+            for month in payoff_plan["months"]:
+                total_balance_rows.append(
+                    {
+                        "month": str(month["month"]),
+                        "total_balance": -month["new_balances"]["balance"].sum(),
+                        "plan": "original",
+                    }
+                )
+            for month in replan_payoff_plan["months"]:
+                total_balance_rows.append(
+                    {
+                        "month": str(month["month"]),
+                        "total_balance": -month["new_balances"]["balance"].sum(),
+                        "plan": "replan",
+                    }
+                )
+            total_balance_df = pd.DataFrame(total_balance_rows)
+            fig = px.line(
+                total_balance_df,
+                x="month",
+                y="total_balance",
+                color="plan",
+                symbol="plan",
+                title="Total Balance",
+                color_discrete_sequence=color_scheme,
+            )
+            fig.update_yaxes(range=[0, total_balance_df["total_balance"].max() * 1.2])
+            st.plotly_chart(fig, use_container_width=True)
+
+            # plot snowball over time
+            snowball_rows = []
+            for month in payoff_plan["months"]:
+                snowball_rows.append(
+                    {
+                        "month": str(month["month"]),
+                        "snowball": month["snowball"],
+                        "plan": "original",
+                    }
+                )
+            for month in replan_payoff_plan["months"]:
+                snowball_rows.append(
+                    {
+                        "month": str(month["month"]),
+                        "snowball": month["snowball"],
+                        "plan": "replan",
+                    }
+                )
+            snowball_df = pd.DataFrame(snowball_rows)
+            fig = px.line(
+                snowball_df,
+                x="month",
+                y="snowball",
+                color="plan",
+                symbol="plan",
+                title="Snowball Size",
+                color_discrete_sequence=color_scheme,
+            )
+            fig.update_yaxes(range=[0, snowball_df["snowball"].max() * 1.2])
+            st.plotly_chart(fig, use_container_width=True)
+
+        # plot individual balances over time
+        replan_months = replan_payoff_plan["months"]
+        balance_rows = []
+        include_total_balance = st.toggle(
+            "Include total balance", value=False, key="replan_include_total_balance"
+        )
+        for month in replan_months:
+            for index, row in month["new_balances"].iterrows():
+                balance_rows.append(
+                    {
+                        "month": str(month["month"]),
+                        "account": row["account"],
+                        "balance": -row["balance"],
+                    }
+                )
+            if include_total_balance:
+                balance_rows.append(
+                    {
+                        "month": str(month["month"]),
+                        "account": "Total Balance",
+                        "balance": -month["new_balances"]["balance"].sum(),
+                    }
+                )
+        total_balance_df = pd.DataFrame(balance_rows)
+        fig = px.line(
+            total_balance_df,
+            x="month",
+            y="balance",
+            color="account",
+            symbol="account",
+            title="Account Balances",
+            color_discrete_sequence=color_scheme,
+        )
+        st.plotly_chart(fig, use_container_width=True)
+
+        with st.expander("View replan payoff plan"):
+            st.table(
+                payoff_plan_table(replan_payoff_plan),
+            )
+
+        # with st.expander("View refinance payoff plan log"):
+        #     for month in refi_payoff_plan["months"]:
+        #         text = ""
+        #         for log in month["log"]:
+        #             if type(log) == list:
+        #                 for l in log:
+        #                     text += f"{l}\n"
+        #             else:
+        #                 text += f"{log}\n"
+        #         st.code(text)
+        #         # st.divider()
+
+    #
+    # ----------- refinance simulation -----------------
+    #
+
+    with tab3:
+        refinance_csv_file = st.file_uploader(
+            "Upload CSV with refinanced accounts", type=["csv"]
+        )
+        if refinance_csv_file:
+            replan_account_df = pd.read_csv(refinance_csv_file)
+        else:
+            replan_account_df = pd.DataFrame(
+                columns=["account", "interest_rate", "balance", "min_payment"]
+            )
+        with st.expander("Edit data"):
+            replan_account_df = st.data_editor(
+                replan_account_df, num_rows="dynamic", use_container_width=True
+            )
+        if len(replan_account_df) == 0:
+            st.error("Please specify some refinanced accounts")
+            st.stop()
+
+        replan_snowball_start = st.number_input(
+            "Refinance Snowball Start", value=snowball_start, step=50
+        )
+        replan_payoff_plan = generate_payoff_plan(
+            replan_account_df,
+            replan_snowball_start,
+            snowball_inc_per_month,
+            payoff_strategy,
+        )
+
+        col1, col2, col3, col4 = st.columns(4)
+        with col1:
+            refi_orig_total_balance = replan_payoff_plan["orig_total_balance"]
+            total_balance_delta = orig_total_balance - refi_orig_total_balance
+            st.metric(
+                label="Refi Total Balance",
+                value=f"{-refi_orig_total_balance:,.2f}",
+                delta=f"{total_balance_delta:,.2f}",
+                delta_color="inverse",
+            )
+        with col2:
+            cumulative_payments_delta = (
+                replan_payoff_plan["cumulative_payments"]
+                - payoff_plan["cumulative_payments"]
+            )
+            st.metric(
+                label="Refi Total Payments",
+                value=f"{replan_payoff_plan['cumulative_payments']:,.2f}",
+                delta=f"{cumulative_payments_delta:,.2f}",
+                delta_color="inverse",
+            )
+        with col3:
+            refi_interest_paid = round(
+                abs(
+                    replan_payoff_plan["orig_total_balance"]
+                    + replan_payoff_plan["cumulative_payments"]
+                ),
+                2,
+            )
+            total_interest_paid_delta = refi_interest_paid - total_interest_paid
+            st.metric(
+                label="Refi Total Interest Paid",
+                value=f"{refi_interest_paid:,.2f}",
+                delta=f"{total_interest_paid_delta:,.2f}",
+                delta_color="inverse",
+            )
+        with col4:
+            payoff_time_delta = replan_payoff_plan["n"] - payoff_plan["n"]
+            st.metric(
+                label="Refi Months to pay off",
+                value=f"{replan_payoff_plan['n']}",
+                delta=f"{payoff_time_delta}",
+                delta_color="inverse",
+            )
+
+        col1, col2 = st.columns(2)
+        with col1:
+            total_payments_rows = []
+            for month in payoff_plan["months"]:
+                total_payments_rows.append(
+                    {
+                        "month": str(month["month"]),
+                        "total_payments": month["total_payment"],
+                        "plan": "original",
+                    }
+                )
+            for month in replan_payoff_plan["months"]:
                 total_payments_rows.append(
                     {
                         "month": str(month["month"]),
@@ -706,7 +958,7 @@ def main():
                         "plan": "original",
                     }
                 )
-            for month in refi_payoff_plan["months"]:
+            for month in replan_payoff_plan["months"]:
                 total_min_payments_rows.append(
                     {
                         "month": str(month["month"]),
@@ -739,7 +991,7 @@ def main():
                         "plan": "original",
                     }
                 )
-            for month in refi_payoff_plan["months"]:
+            for month in replan_payoff_plan["months"]:
                 total_balance_rows.append(
                     {
                         "month": str(month["month"]),
@@ -770,7 +1022,7 @@ def main():
                         "plan": "original",
                     }
                 )
-            for month in refi_payoff_plan["months"]:
+            for month in replan_payoff_plan["months"]:
                 snowball_rows.append(
                     {
                         "month": str(month["month"]),
@@ -793,11 +1045,11 @@ def main():
 
         with st.expander("View refinance payoff plan"):
             st.table(
-                payoff_plan_table(refi_payoff_plan),
+                payoff_plan_table(replan_payoff_plan),
             )
 
         with st.expander("View refinance payoff plan log"):
-            for month in refi_payoff_plan["months"]:
+            for month in replan_payoff_plan["months"]:
                 text = ""
                 for log in month["log"]:
                     if type(log) == list:

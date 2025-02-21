@@ -100,7 +100,6 @@ def calc_cc_min_payment(
         )
 
 
-@st.cache_data
 def fetch_debts_from_ynab():
     ynab_auth_token = os.getenv("YNAB_AUTH_TOKEN")
     ynab_budget_id = os.getenv("YNAB_BUDGET_ID")
@@ -409,6 +408,8 @@ def main():
         )
 
         ynab_debts = fetch_debts_from_ynab()
+        if st.button("Refresh ynab data"):
+            ynab_debts = fetch_debts_from_ynab()
         accounts_df = pd.DataFrame(ynab_debts)
 
         csv_file = st.file_uploader("Upload CSV", type=["csv"])
@@ -821,7 +822,7 @@ def main():
             title="Account Balances",
             color_discrete_sequence=color_scheme,
         )
-        st.plotly_chart(fig, use_container_width=True)
+        st.plotly_chart(fig, use_container_width=True, key="orig_payoff")
 
         with st.expander("View replan payoff plan"):
             st.table(

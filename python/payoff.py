@@ -378,15 +378,9 @@ def payoff_plan_table(payoff_plan):
         row["Month"] = month["month"]
         for index, account in month["payments"].iterrows():
             if account["balance"] < 0:
-                # row[account["account"]] = (
-                #     f"{account['min_payment']:,.2f} min + {account['overflow']:,.2f} overflow + {account['snowball']:,.2f} snowball= {account['total_payment']:,.2f}"
-                # )
                 row[account["account"]] = f"${account['total_payment']:,.2f}"
-            else:
-                row[account["account"]] = ""
         row["Min payments"] = f"${month['total_min_payments']:,.2f}"
         row["Snowball"] = f"${month['snowball']:,.2f}"
-        # row["Overflow"] = f"${month['total_overflow']:,.2f}"
         row["Total payments"] = f"${month['total_payment']:,.2f}"
         row["Total balance"] = f"${abs(month['new_balances']['balance'].sum()):,.2f}"
         table_rows.append(row)

@@ -1092,8 +1092,13 @@ def main():
         """)
 
         # Check if we have stored data
-        db_stats = get_db_stats()
-        stored_snapshots = get_all_snapshots()
+        try:
+            db_stats = get_db_stats()
+            stored_snapshots = get_all_snapshots()
+        except Exception as e:
+            st.error(f"Database error: {e}")
+            db_stats = {"num_snapshots": 0}
+            stored_snapshots = []
 
         col1, col2 = st.columns([2, 1])
 

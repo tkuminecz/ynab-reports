@@ -9,6 +9,8 @@ pandas = "*"
 numpy = "*"
 plotly = "*"
 ynab = "*"
+python-dateutil = "*"
+python-dotenv = "*"
 
 [dev-packages]
 

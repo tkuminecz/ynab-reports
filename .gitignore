@@ -2,3 +2,11 @@
 node_modules
 
 *.csv
+
+# Python
+__pycache__/
+*.pyc
+*.pyo
+
+# Database
+*.db

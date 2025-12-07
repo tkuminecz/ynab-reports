@@ -1080,6 +1080,7 @@ def main():
     #
 
     with tab4:
+        st.write("DEBUG: Tab4 is rendering")  # Debug line
         st.header("Payoff Timeline History")
         st.markdown("""
         Track how your debt payoff plan has evolved over time. This reconstructs

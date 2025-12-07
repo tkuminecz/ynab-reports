@@ -26,8 +26,6 @@ from db import (
 
 load_dotenv()
 
-# Initialize database on module load
-init_db()
 
 class PayoffStrategy(object):
     def get_ordering(self, accounts_df: pd.DataFrame) -> list:
@@ -1091,12 +1089,15 @@ def main():
         - Trends in your payoff velocity
         """)
 
-        # Check if we have stored data
+        # Initialize and check database
         try:
+            init_db()
             db_stats = get_db_stats()
             stored_snapshots = get_all_snapshots()
         except Exception as e:
             st.error(f"Database error: {e}")
+            import traceback
+            st.code(traceback.format_exc())
             db_stats = {"num_snapshots": 0}
             stored_snapshots = []
 

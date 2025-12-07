@@ -2,11 +2,14 @@ import os
 import math
 import re
 from typing import Optional
+from dotenv import load_dotenv
 import streamlit as st
 import pandas as pd
 import plotly.express as px
 from ynab_helpers import fetch_accounts, fetch_categories
 
+
+load_dotenv()
 
 class PayoffStrategy(object):
     def get_ordering(self, accounts_df: pd.DataFrame) -> list:

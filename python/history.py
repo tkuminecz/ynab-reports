@@ -77,7 +77,9 @@ def reconstruct_monthly_balances(
     """
     today = date.today()
     months = []
-    for i in range(num_months, -1, -1):
+    # Start from num_months ago, but stop before the current month (i=1, not i=0)
+    # The current month's data will be added separately using live YNAB data
+    for i in range(num_months, 0, -1):
         month_date = today - relativedelta(months=i)
         months.append(get_month_end(month_date))
 

@@ -10,9 +10,9 @@ def get_ynab_client(auth_token: str):
     return ynabApi.Configuration(access_token=auth_token)
 
 
-@st.cache_data(ttl=300)  # Cache for 5 minutes
+@st.cache_data(ttl=3600)  # Cache for 1 hour
 def fetch_accounts(auth_token: str, budget_id: str):
-    """Fetch all non-deleted accounts. Cached for 5 minutes."""
+    """Fetch all non-deleted accounts. Cached for 1 hour."""
     ynabConfig = ynabApi.Configuration(access_token=auth_token)
     with ynabApi.ApiClient(ynabConfig) as client:
         accounts_api = ynabApi.AccountsApi(client)
@@ -25,9 +25,9 @@ def fetch_accounts(auth_token: str, budget_id: str):
         ]
 
 
-@st.cache_data(ttl=300)  # Cache for 5 minutes
+@st.cache_data(ttl=3600)  # Cache for 1 hour
 def fetch_categories(auth_token: str, budget_id: str):
-    """Fetch all non-deleted categories. Cached for 5 minutes."""
+    """Fetch all non-deleted categories. Cached for 1 hour."""
     ynabConfig = ynabApi.Configuration(access_token=auth_token)
     with ynabApi.ApiClient(ynabConfig) as client:
         categories_api = ynabApi.CategoriesApi(client)
@@ -41,11 +41,11 @@ def fetch_categories(auth_token: str, budget_id: str):
         ]
 
 
-@st.cache_data(ttl=300)  # Cache for 5 minutes
+@st.cache_data(ttl=3600)  # Cache for 1 hour
 def fetch_transactions(
     auth_token: str, budget_id: str, since_date: Optional[str] = None
 ) -> List:
-    """Fetch all transactions for the budget, optionally filtered by date. Cached for 5 minutes."""
+    """Fetch all transactions for the budget, optionally filtered by date. Cached for 1 hour."""
     ynabConfig = ynabApi.Configuration(access_token=auth_token)
     with ynabApi.ApiClient(ynabConfig) as client:
         transactions_api = ynabApi.TransactionsApi(client)
@@ -58,11 +58,11 @@ def fetch_transactions(
         return [_transaction_to_dict(t) for t in response.data.transactions]
 
 
-@st.cache_data(ttl=300)  # Cache for 5 minutes
+@st.cache_data(ttl=3600)  # Cache for 1 hour
 def fetch_transactions_by_account(
     auth_token: str, budget_id: str, account_id: str, since_date: Optional[str] = None
 ) -> List:
-    """Fetch all transactions for a specific account. Cached for 5 minutes."""
+    """Fetch all transactions for a specific account. Cached for 1 hour."""
     ynabConfig = ynabApi.Configuration(access_token=auth_token)
     with ynabApi.ApiClient(ynabConfig) as client:
         transactions_api = ynabApi.TransactionsApi(client)
@@ -77,14 +77,14 @@ def fetch_transactions_by_account(
         return [_transaction_to_dict(t) for t in response.data.transactions]
 
 
-@st.cache_data(ttl=300)  # Cache for 5 minutes
+@st.cache_data(ttl=3600)  # Cache for 1 hour
 def fetch_debt_account_transactions(
     auth_token: str, budget_id: str, since_date: Optional[date] = None
 ) -> dict:
     """
     Fetch transactions for all debt accounts (credit cards and loans).
     Returns a dict mapping account_id -> dict with account info and transactions.
-    Cached for 5 minutes.
+    Cached for 1 hour.
     """
     accounts = fetch_accounts(auth_token, budget_id)
     debt_account_types = [

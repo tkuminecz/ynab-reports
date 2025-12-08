@@ -1173,6 +1173,27 @@ def main():
                             payoff_strategy,
                         )
 
+                    # Add current state as the latest projection (from tab1's payoff_plan)
+                    today = date.today()
+                    current_month = today.strftime("%Y-%m")
+                    debt_free_date = today + relativedelta(months=payoff_plan["n"])
+
+                    current_projection = {
+                        "snapshot_month": current_month,
+                        "snapshot_date": today,
+                        "total_balance": payoff_plan["orig_total_balance"],
+                        "months_to_payoff": payoff_plan["n"],
+                        "projected_debt_free_date": debt_free_date,
+                        "total_payments": payoff_plan["cumulative_payments"],
+                        "total_interest": payoff_plan["cumulative_payments"] + payoff_plan["orig_total_balance"],
+                        "num_accounts": len(accounts_df),
+                    }
+
+                    # Replace or append current month's projection
+                    projections = [p for p in projections if p["snapshot_month"] != current_month]
+                    projections.append(current_projection)
+                    projections.sort(key=lambda x: x["snapshot_date"])
+
                     # Save to database
                     save_projections(
                         projections,

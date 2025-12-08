@@ -50,7 +50,8 @@ def reconstruct_balance_at_date(
     balance = current_balance
 
     for txn in transactions:
-        txn_date = datetime.strptime(txn.date, "%Y-%m-%d").date() if isinstance(txn.date, str) else txn.date
+        # YNAB API uses var_date instead of date (date is a reserved Python keyword)
+        txn_date = datetime.strptime(txn.var_date, "%Y-%m-%d").date() if isinstance(txn.var_date, str) else txn.var_date
 
         # If transaction is after target date, reverse it
         if txn_date > target_date:

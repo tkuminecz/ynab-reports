@@ -9,7 +9,7 @@ import streamlit as st
 import pandas as pd
 import plotly.express as px
 import plotly.graph_objects as go
-from ynab_helpers import fetch_accounts, fetch_categories, fetch_debt_account_transactions
+from ynab_helpers import fetch_accounts_as_objects, fetch_categories_as_objects, fetch_debt_account_transactions
 from history import (
     build_historical_snapshots,
     generate_historical_payoff_projections,
@@ -122,9 +122,9 @@ def calc_cc_min_payment(
 def fetch_debts_from_ynab():
     ynab_auth_token = os.getenv("YNAB_AUTH_TOKEN")
     ynab_budget_id = os.getenv("YNAB_BUDGET_ID")
-    accounts = fetch_accounts(ynab_auth_token, ynab_budget_id)
+    accounts = fetch_accounts_as_objects(ynab_auth_token, ynab_budget_id)
     # st.write(accounts)
-    categories = fetch_categories(ynab_auth_token, ynab_budget_id)
+    categories = fetch_categories_as_objects(ynab_auth_token, ynab_budget_id)
     # st.write(categories)
 
     credit_card_accounts = [

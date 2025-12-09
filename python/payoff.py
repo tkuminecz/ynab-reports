@@ -1,15 +1,31 @@
 import os
 import math
 import re
+from datetime import date, datetime
+from dateutil.relativedelta import relativedelta
 from typing import Optional
 from dotenv import load_dotenv
 import streamlit as st
 import pandas as pd
 import plotly.express as px
-from ynab_helpers import fetch_accounts, fetch_categories
+import plotly.graph_objects as go
+from ynab_helpers import fetch_accounts_as_objects, fetch_categories_as_objects, fetch_debt_account_transactions
+from history import (
+    build_historical_snapshots,
+    generate_historical_payoff_projections,
+    calculate_projection_trends,
+)
+from db import (
+    init_db,
+    save_projections,
+    get_all_snapshots,
+    get_db_stats,
+    clear_all_data,
+)
 
 
 load_dotenv()
+
 
 class PayoffStrategy(object):
     def get_ordering(self, accounts_df: pd.DataFrame) -> list:
@@ -106,9 +122,9 @@ def calc_cc_min_payment(
 def fetch_debts_from_ynab():
     ynab_auth_token = os.getenv("YNAB_AUTH_TOKEN")
     ynab_budget_id = os.getenv("YNAB_BUDGET_ID")
-    accounts = fetch_accounts(ynab_auth_token, ynab_budget_id)
+    accounts = fetch_accounts_as_objects(ynab_auth_token, ynab_budget_id)
     # st.write(accounts)
-    categories = fetch_categories(ynab_auth_token, ynab_budget_id)
+    categories = fetch_categories_as_objects(ynab_auth_token, ynab_budget_id)
     # st.write(categories)
 
     credit_card_accounts = [
@@ -439,11 +455,12 @@ def main():
 
     color_scheme = px.colors.qualitative.D3
 
-    tab1, tab2, tab3 = st.tabs(
+    tab1, tab2, tab3, tab4 = st.tabs(
         [
             "Payoff Plan",
             "Simulate Plan Change",
             "Simulate Refinance",
+            "History & Trends",
         ]
     )
 
@@ -857,206 +874,554 @@ def main():
                 replan_account_df, num_rows="dynamic", use_container_width=True
             )
         if len(replan_account_df) == 0:
-            st.error("Please specify some refinanced accounts")
-            st.stop()
+            st.info("Upload a CSV with refinanced accounts to simulate refinancing scenarios.")
+        else:
+            replan_snowball_start = st.number_input(
+                "Refinance Snowball Start", value=snowball_start, step=50
+            )
+            replan_payoff_plan = generate_payoff_plan(
+                replan_account_df,
+                replan_snowball_start,
+                snowball_inc_per_month,
+                payoff_strategy,
+            )
 
-        replan_snowball_start = st.number_input(
-            "Refinance Snowball Start", value=snowball_start, step=50
-        )
-        replan_payoff_plan = generate_payoff_plan(
-            replan_account_df,
-            replan_snowball_start,
-            snowball_inc_per_month,
-            payoff_strategy,
-        )
+            col1, col2, col3, col4 = st.columns(4)
+            with col1:
+                refi_orig_total_balance = replan_payoff_plan["orig_total_balance"]
+                total_balance_delta = orig_total_balance - refi_orig_total_balance
+                st.metric(
+                    label="Refi Total Balance",
+                    value=f"{-refi_orig_total_balance:,.2f}",
+                    delta=f"{total_balance_delta:,.2f}",
+                    delta_color="inverse",
+                )
+            with col2:
+                cumulative_payments_delta = (
+                    replan_payoff_plan["cumulative_payments"]
+                    - payoff_plan["cumulative_payments"]
+                )
+                st.metric(
+                    label="Refi Total Payments",
+                    value=f"{replan_payoff_plan['cumulative_payments']:,.2f}",
+                    delta=f"{cumulative_payments_delta:,.2f}",
+                    delta_color="inverse",
+                )
+            with col3:
+                refi_interest_paid = round(
+                    abs(
+                        replan_payoff_plan["orig_total_balance"]
+                        + replan_payoff_plan["cumulative_payments"]
+                    ),
+                    2,
+                )
+                total_interest_paid_delta = refi_interest_paid - total_interest_paid
+                st.metric(
+                    label="Refi Total Interest Paid",
+                    value=f"{refi_interest_paid:,.2f}",
+                    delta=f"{total_interest_paid_delta:,.2f}",
+                    delta_color="inverse",
+                )
+            with col4:
+                payoff_time_delta = replan_payoff_plan["n"] - payoff_plan["n"]
+                st.metric(
+                    label="Refi Months to pay off",
+                    value=f"{replan_payoff_plan['n']}",
+                    delta=f"{payoff_time_delta}",
+                    delta_color="inverse",
+                )
 
-        col1, col2, col3, col4 = st.columns(4)
+            col1, col2 = st.columns(2)
+            with col1:
+                total_payments_rows = []
+                for month in payoff_plan["months"]:
+                    total_payments_rows.append(
+                        {
+                            "month": str(month["month"]),
+                            "total_payments": month["total_payment"],
+                            "plan": "original",
+                        }
+                    )
+                for month in replan_payoff_plan["months"]:
+                    total_payments_rows.append(
+                        {
+                            "month": str(month["month"]),
+                            "total_payments": month["total_payment"],
+                            "plan": "refinance",
+                        }
+                    )
+                total_payments_df = pd.DataFrame(total_payments_rows)
+                fig = px.line(
+                    total_payments_df,
+                    x="month",
+                    y="total_payments",
+                    color="plan",
+                    symbol="plan",
+                    title="Total Payments",
+                    color_discrete_sequence=color_scheme,
+                )
+                fig.update_yaxes(range=[0, total_payments_df["total_payments"].max() * 1.2])
+                st.plotly_chart(fig, use_container_width=True)
+
+                total_min_payments_rows = []
+                for month in payoff_plan["months"]:
+                    total_min_payments_rows.append(
+                        {
+                            "month": str(month["month"]),
+                            "total_min_payments": month["total_min_payments"],
+                            "plan": "original",
+                        }
+                    )
+                for month in replan_payoff_plan["months"]:
+                    total_min_payments_rows.append(
+                        {
+                            "month": str(month["month"]),
+                            "total_min_payments": month["total_min_payments"],
+                            "plan": "refinance",
+                        }
+                    )
+                total_min_payments_df = pd.DataFrame(total_min_payments_rows)
+                fig = px.line(
+                    total_min_payments_df,
+                    x="month",
+                    y="total_min_payments",
+                    color="plan",
+                    symbol="plan",
+                    title="Minimum Payments",
+                    color_discrete_sequence=color_scheme,
+                )
+                fig.update_yaxes(
+                    range=[0, total_min_payments_df["total_min_payments"].max() * 1.2]
+                )
+                st.plotly_chart(fig, use_container_width=True)
+
+            with col2:
+                total_balance_rows = []
+                for month in payoff_plan["months"]:
+                    total_balance_rows.append(
+                        {
+                            "month": str(month["month"]),
+                            "total_balance": -month["new_balances"]["balance"].sum(),
+                            "plan": "original",
+                        }
+                    )
+                for month in replan_payoff_plan["months"]:
+                    total_balance_rows.append(
+                        {
+                            "month": str(month["month"]),
+                            "total_balance": -month["new_balances"]["balance"].sum(),
+                            "plan": "refinance",
+                        }
+                    )
+                total_balance_df = pd.DataFrame(total_balance_rows)
+                fig = px.line(
+                    total_balance_df,
+                    x="month",
+                    y="total_balance",
+                    color="plan",
+                    symbol="plan",
+                    title="Total Balance",
+                    color_discrete_sequence=color_scheme,
+                )
+                fig.update_yaxes(range=[0, total_balance_df["total_balance"].max() * 1.2])
+                st.plotly_chart(fig, use_container_width=True)
+
+                # plot snowball over time
+                snowball_rows = []
+                for month in payoff_plan["months"]:
+                    snowball_rows.append(
+                        {
+                            "month": str(month["month"]),
+                            "snowball": month["snowball"],
+                            "plan": "original",
+                        }
+                    )
+                for month in replan_payoff_plan["months"]:
+                    snowball_rows.append(
+                        {
+                            "month": str(month["month"]),
+                            "snowball": month["snowball"],
+                            "plan": "refinance",
+                        }
+                    )
+                snowball_df = pd.DataFrame(snowball_rows)
+                fig = px.line(
+                    snowball_df,
+                    x="month",
+                    y="snowball",
+                    color="plan",
+                    symbol="plan",
+                    title="Snowball Size",
+                    color_discrete_sequence=color_scheme,
+                )
+                fig.update_yaxes(range=[0, snowball_df["snowball"].max() * 1.2])
+                st.plotly_chart(fig, use_container_width=True)
+
+            with st.expander("View refinance payoff plan"):
+                st.table(
+                    payoff_plan_table(replan_payoff_plan),
+                )
+
+            with st.expander("View refinance payoff plan log"):
+                for month in replan_payoff_plan["months"]:
+                    text = ""
+                    for log in month["log"]:
+                        if type(log) == list:
+                            for l in log:
+                                text += f"{l}\n"
+                        else:
+                            text += f"{log}\n"
+                    st.code(text)
+                    # st.divider()
+
+    #
+    # ----------- history & trends -----------------
+    #
+
+    with tab4:
+        st.write("DEBUG: Tab4 is rendering")  # Debug line
+        st.header("Payoff Timeline History")
+        st.markdown("""
+        Track how your debt payoff plan has evolved over time. This reconstructs
+        historical data from your YNAB transaction history to show you:
+        - How your projected debt-free date has changed
+        - Whether you're ahead or behind your original plan
+        - Trends in your payoff velocity
+        """)
+
+        # Initialize and check database
+        try:
+            init_db()
+            db_stats = get_db_stats()
+            stored_snapshots = get_all_snapshots()
+        except Exception as e:
+            st.error(f"Database error: {e}")
+            import traceback
+            st.code(traceback.format_exc())
+            db_stats = {"num_snapshots": 0}
+            stored_snapshots = []
+
+        col1, col2 = st.columns([2, 1])
+
         with col1:
-            refi_orig_total_balance = replan_payoff_plan["orig_total_balance"]
-            total_balance_delta = orig_total_balance - refi_orig_total_balance
-            st.metric(
-                label="Refi Total Balance",
-                value=f"{-refi_orig_total_balance:,.2f}",
-                delta=f"{total_balance_delta:,.2f}",
-                delta_color="inverse",
+            num_months = st.slider(
+                "Months of history to analyze",
+                min_value=3,
+                max_value=24,
+                value=12,
+                help="How many months back to reconstruct from transaction history"
             )
-        with col2:
-            cumulative_payments_delta = (
-                replan_payoff_plan["cumulative_payments"]
-                - payoff_plan["cumulative_payments"]
-            )
-            st.metric(
-                label="Refi Total Payments",
-                value=f"{replan_payoff_plan['cumulative_payments']:,.2f}",
-                delta=f"{cumulative_payments_delta:,.2f}",
-                delta_color="inverse",
-            )
-        with col3:
-            refi_interest_paid = round(
-                abs(
-                    replan_payoff_plan["orig_total_balance"]
-                    + replan_payoff_plan["cumulative_payments"]
-                ),
-                2,
-            )
-            total_interest_paid_delta = refi_interest_paid - total_interest_paid
-            st.metric(
-                label="Refi Total Interest Paid",
-                value=f"{refi_interest_paid:,.2f}",
-                delta=f"{total_interest_paid_delta:,.2f}",
-                delta_color="inverse",
-            )
-        with col4:
-            payoff_time_delta = replan_payoff_plan["n"] - payoff_plan["n"]
-            st.metric(
-                label="Refi Months to pay off",
-                value=f"{replan_payoff_plan['n']}",
-                delta=f"{payoff_time_delta}",
-                delta_color="inverse",
-            )
-
-        col1, col2 = st.columns(2)
-        with col1:
-            total_payments_rows = []
-            for month in payoff_plan["months"]:
-                total_payments_rows.append(
-                    {
-                        "month": str(month["month"]),
-                        "total_payments": month["total_payment"],
-                        "plan": "original",
-                    }
-                )
-            for month in replan_payoff_plan["months"]:
-                total_payments_rows.append(
-                    {
-                        "month": str(month["month"]),
-                        "total_payments": month["total_payment"],
-                        "plan": "refinance",
-                    }
-                )
-            total_payments_df = pd.DataFrame(total_payments_rows)
-            fig = px.line(
-                total_payments_df,
-                x="month",
-                y="total_payments",
-                color="plan",
-                symbol="plan",
-                title="Total Payments",
-                color_discrete_sequence=color_scheme,
-            )
-            fig.update_yaxes(range=[0, total_payments_df["total_payments"].max() * 1.2])
-            st.plotly_chart(fig, use_container_width=True)
-
-            total_min_payments_rows = []
-            for month in payoff_plan["months"]:
-                total_min_payments_rows.append(
-                    {
-                        "month": str(month["month"]),
-                        "total_min_payments": month["total_min_payments"],
-                        "plan": "original",
-                    }
-                )
-            for month in replan_payoff_plan["months"]:
-                total_min_payments_rows.append(
-                    {
-                        "month": str(month["month"]),
-                        "total_min_payments": month["total_min_payments"],
-                        "plan": "refinance",
-                    }
-                )
-            total_min_payments_df = pd.DataFrame(total_min_payments_rows)
-            fig = px.line(
-                total_min_payments_df,
-                x="month",
-                y="total_min_payments",
-                color="plan",
-                symbol="plan",
-                title="Minimum Payments",
-                color_discrete_sequence=color_scheme,
-            )
-            fig.update_yaxes(
-                range=[0, total_min_payments_df["total_min_payments"].max() * 1.2]
-            )
-            st.plotly_chart(fig, use_container_width=True)
 
         with col2:
-            total_balance_rows = []
-            for month in payoff_plan["months"]:
-                total_balance_rows.append(
-                    {
-                        "month": str(month["month"]),
-                        "total_balance": -month["new_balances"]["balance"].sum(),
-                        "plan": "original",
-                    }
-                )
-            for month in replan_payoff_plan["months"]:
-                total_balance_rows.append(
-                    {
-                        "month": str(month["month"]),
-                        "total_balance": -month["new_balances"]["balance"].sum(),
-                        "plan": "refinance",
-                    }
-                )
-            total_balance_df = pd.DataFrame(total_balance_rows)
-            fig = px.line(
-                total_balance_df,
-                x="month",
-                y="total_balance",
-                color="plan",
-                symbol="plan",
-                title="Total Balance",
-                color_discrete_sequence=color_scheme,
+            st.metric("Stored Snapshots", db_stats["num_snapshots"])
+
+        # Buttons for data management
+        btn_col1, btn_col2, btn_col3 = st.columns(3)
+
+        with btn_col1:
+            reconstruct_btn = st.button(
+                "Reconstruct History from YNAB",
+                type="primary",
+                help="Fetch transaction history and rebuild historical payoff projections"
             )
-            fig.update_yaxes(range=[0, total_balance_df["total_balance"].max() * 1.2])
+
+        with btn_col2:
+            refresh_btn = st.button(
+                "Refresh from Database",
+                help="Load stored historical data"
+            )
+
+        with btn_col3:
+            if st.button("Clear History Data", type="secondary"):
+                clear_all_data()
+                st.rerun()
+
+        # Reconstruct history from YNAB
+        if reconstruct_btn:
+            with st.spinner("Fetching transaction history from YNAB..."):
+                try:
+                    ynab_auth_token = os.getenv("YNAB_AUTH_TOKEN")
+                    ynab_budget_id = os.getenv("YNAB_BUDGET_ID")
+
+                    # Calculate since_date
+                    since_date = date.today() - relativedelta(months=num_months)
+
+                    # Fetch transaction data
+                    account_data = fetch_debt_account_transactions(
+                        ynab_auth_token, ynab_budget_id, since_date
+                    )
+
+                    st.success(f"Fetched transactions for {len(account_data)} debt accounts")
+
+                    # Build historical snapshots
+                    with st.spinner("Reconstructing historical balances..."):
+                        historical_snapshots = build_historical_snapshots(
+                            account_data,
+                            accounts_df,
+                            num_months=num_months,
+                        )
+
+                    st.success(f"Reconstructed {len(historical_snapshots)} monthly snapshots")
+
+                    # Generate payoff projections for each historical month
+                    with st.spinner("Generating historical payoff projections..."):
+                        projections = generate_historical_payoff_projections(
+                            historical_snapshots,
+                            generate_payoff_plan,
+                            snowball_start,
+                            snowball_inc_per_month,
+                            payoff_strategy,
+                        )
+
+                    # Add current state as the latest projection (from tab1's payoff_plan)
+                    today = date.today()
+                    current_month = today.strftime("%Y-%m")
+                    debt_free_date = today + relativedelta(months=payoff_plan["n"])
+
+                    current_projection = {
+                        "snapshot_month": current_month,
+                        "snapshot_date": today,
+                        "total_balance": payoff_plan["orig_total_balance"],
+                        "months_to_payoff": payoff_plan["n"],
+                        "projected_debt_free_date": debt_free_date,
+                        "total_payments": payoff_plan["cumulative_payments"],
+                        "total_interest": payoff_plan["cumulative_payments"] + payoff_plan["orig_total_balance"],
+                        "num_accounts": len(accounts_df),
+                    }
+
+                    # Replace or append current month's projection
+                    projections = [p for p in projections if p["snapshot_month"] != current_month]
+                    projections.append(current_projection)
+                    projections.sort(key=lambda x: x["snapshot_date"])
+
+                    # Save to database
+                    save_projections(
+                        projections,
+                        snowball_amount=snowball_start,
+                        snowball_increase=snowball_inc_per_month,
+                        strategy=payoff_strategy_name,
+                    )
+
+                    st.success(f"Saved {len(projections)} projections to database")
+
+                    # Refresh stored snapshots
+                    stored_snapshots = get_all_snapshots()
+
+                except Exception as e:
+                    st.error(f"Error reconstructing history: {e}")
+                    import traceback
+                    st.code(traceback.format_exc())
+
+        # Display historical data if available
+        if stored_snapshots:
+            st.divider()
+            st.subheader("Historical Projections")
+
+            # Convert to DataFrame for easier plotting
+            snapshots_df = pd.DataFrame(stored_snapshots)
+            snapshots_df["snapshot_date"] = pd.to_datetime(snapshots_df["snapshot_date"])
+            snapshots_df["projected_debt_free_date"] = pd.to_datetime(
+                snapshots_df["projected_debt_free_date"]
+            )
+
+            # Key metrics
+            if len(snapshots_df) >= 2:
+                first_snapshot = snapshots_df.iloc[0]
+                last_snapshot = snapshots_df.iloc[-1]
+
+                metric_col1, metric_col2, metric_col3, metric_col4 = st.columns(4)
+
+                with metric_col1:
+                    balance_change = last_snapshot["total_balance"] - first_snapshot["total_balance"]
+                    st.metric(
+                        "Balance Change",
+                        f"${-last_snapshot['total_balance']:,.0f}",
+                        delta=f"${-balance_change:,.0f}",
+                        delta_color="normal",
+                    )
+
+                with metric_col2:
+                    months_change = last_snapshot["months_to_payoff"] - first_snapshot["months_to_payoff"]
+                    st.metric(
+                        "Months to Payoff",
+                        f"{last_snapshot['months_to_payoff']}",
+                        delta=f"{months_change:+d}",
+                        delta_color="inverse",
+                    )
+
+                with metric_col3:
+                    first_debt_free = first_snapshot["projected_debt_free_date"]
+                    last_debt_free = last_snapshot["projected_debt_free_date"]
+                    days_change = (last_debt_free - first_debt_free).days
+                    st.metric(
+                        "Debt-Free Date",
+                        last_debt_free.strftime("%b %Y"),
+                        delta=f"{days_change:+d} days",
+                        delta_color="inverse",
+                    )
+
+                with metric_col4:
+                    # Best projection ever
+                    best_idx = snapshots_df["projected_debt_free_date"].idxmin()
+                    best_snapshot = snapshots_df.loc[best_idx]
+                    st.metric(
+                        "Best Projection",
+                        best_snapshot["projected_debt_free_date"].strftime("%b %Y"),
+                        delta=f"({best_snapshot['snapshot_date'].strftime('%b %Y')})",
+                        delta_color="off",
+                    )
+
+            # Debt-Free Date Over Time chart
+            st.subheader("Projected Debt-Free Date Over Time")
+            fig = go.Figure()
+
+            fig.add_trace(go.Scatter(
+                x=snapshots_df["snapshot_date"],
+                y=snapshots_df["projected_debt_free_date"],
+                mode="lines+markers",
+                name="Projected Debt-Free Date",
+                line=dict(color=color_scheme[0], width=3),
+                marker=dict(size=8),
+            ))
+
+            fig.update_layout(
+                xaxis_title="Snapshot Date",
+                yaxis_title="Projected Debt-Free Date",
+                hovermode="x unified",
+            )
+            fig.update_yaxes(tickformat="%b %Y")
+
             st.plotly_chart(fig, use_container_width=True)
 
-            # plot snowball over time
-            snowball_rows = []
-            for month in payoff_plan["months"]:
-                snowball_rows.append(
-                    {
-                        "month": str(month["month"]),
-                        "snowball": month["snowball"],
-                        "plan": "original",
-                    }
-                )
-            for month in replan_payoff_plan["months"]:
-                snowball_rows.append(
-                    {
-                        "month": str(month["month"]),
-                        "snowball": month["snowball"],
-                        "plan": "refinance",
-                    }
-                )
-            snowball_df = pd.DataFrame(snowball_rows)
-            fig = px.line(
-                snowball_df,
-                x="month",
-                y="snowball",
-                color="plan",
-                symbol="plan",
-                title="Snowball Size",
-                color_discrete_sequence=color_scheme,
-            )
-            fig.update_yaxes(range=[0, snowball_df["snowball"].max() * 1.2])
-            st.plotly_chart(fig, use_container_width=True)
+            # Months to Payoff Trend
+            col1, col2 = st.columns(2)
 
-        with st.expander("View refinance payoff plan"):
-            st.table(
-                payoff_plan_table(replan_payoff_plan),
-            )
+            with col1:
+                st.subheader("Months to Payoff")
+                fig = px.line(
+                    snapshots_df,
+                    x="snapshot_date",
+                    y="months_to_payoff",
+                    markers=True,
+                    color_discrete_sequence=color_scheme,
+                )
+                fig.update_layout(
+                    xaxis_title="Snapshot Date",
+                    yaxis_title="Months Remaining",
+                )
+                st.plotly_chart(fig, use_container_width=True)
 
-        with st.expander("View refinance payoff plan log"):
-            for month in replan_payoff_plan["months"]:
-                text = ""
-                for log in month["log"]:
-                    if type(log) == list:
-                        for l in log:
-                            text += f"{l}\n"
-                    else:
-                        text += f"{log}\n"
-                st.code(text)
-                # st.divider()
+            with col2:
+                st.subheader("Total Balance Over Time")
+                fig = px.line(
+                    snapshots_df,
+                    x="snapshot_date",
+                    y=snapshots_df["total_balance"].abs(),
+                    markers=True,
+                    color_discrete_sequence=[color_scheme[1]],
+                )
+                fig.update_layout(
+                    xaxis_title="Snapshot Date",
+                    yaxis_title="Total Balance ($)",
+                )
+                st.plotly_chart(fig, use_container_width=True)
+
+            # Month-over-month changes
+            if len(snapshots_df) >= 2:
+                st.subheader("Month-over-Month Changes")
+
+                snapshots_df["months_change"] = snapshots_df["months_to_payoff"].diff()
+                snapshots_df["balance_change"] = snapshots_df["total_balance"].diff()
+
+                # Filter out the first row (NaN diff)
+                changes_df = snapshots_df.dropna(subset=["months_change"]).copy()
+
+                if len(changes_df) > 0:
+                    col1, col2 = st.columns(2)
+
+                    with col1:
+                        # Color bars based on improvement (negative = good)
+                        colors = [
+                            color_scheme[2] if x <= 0 else color_scheme[3]
+                            for x in changes_df["months_change"]
+                        ]
+
+                        fig = go.Figure(go.Bar(
+                            x=changes_df["snapshot_date"],
+                            y=changes_df["months_change"],
+                            marker_color=colors,
+                            name="Months Change",
+                        ))
+                        fig.update_layout(
+                            title="Monthly Change in Payoff Timeline",
+                            xaxis_title="Month",
+                            yaxis_title="Change in Months (negative = improvement)",
+                        )
+                        fig.add_hline(y=0, line_dash="dash", line_color="gray")
+                        st.plotly_chart(fig, use_container_width=True)
+
+                    with col2:
+                        # Balance reduction (make positive for display)
+                        fig = go.Figure(go.Bar(
+                            x=changes_df["snapshot_date"],
+                            y=-changes_df["balance_change"],
+                            marker_color=color_scheme[2],
+                            name="Balance Reduction",
+                        ))
+                        fig.update_layout(
+                            title="Monthly Balance Reduction",
+                            xaxis_title="Month",
+                            yaxis_title="Balance Reduced ($)",
+                        )
+                        st.plotly_chart(fig, use_container_width=True)
+
+            # Calculate and display trends
+            if len(stored_snapshots) >= 2:
+                projections_for_trends = [
+                    {
+                        "snapshot_date": datetime.strptime(s["snapshot_date"], "%Y-%m-%d").date() if isinstance(s["snapshot_date"], str) else s["snapshot_date"],
+                        "snapshot_month": s["snapshot_month"],
+                        "total_balance": s["total_balance"],
+                        "months_to_payoff": s["months_to_payoff"],
+                        "projected_debt_free_date": datetime.strptime(s["projected_debt_free_date"], "%Y-%m-%d").date() if isinstance(s["projected_debt_free_date"], str) else s["projected_debt_free_date"],
+                    }
+                    for s in stored_snapshots
+                ]
+
+                trends = calculate_projection_trends(projections_for_trends)
+
+                if trends:
+                    st.divider()
+                    st.subheader("Trend Analysis")
+
+                    trend_col1, trend_col2 = st.columns(2)
+
+                    with trend_col1:
+                        st.markdown("**Progress Summary**")
+                        st.markdown(f"""
+                        - **Total balance reduced**: ${abs(trends['balance_reduction']):,.2f} ({abs(trends['balance_reduction_pct']):.1f}%)
+                        - **Timeline change**: {trends['total_months_change']:+d} months
+                        - **Avg monthly paydown**: ${abs(trends['avg_monthly_balance_reduction']):,.2f}
+                        """)
+
+                    with trend_col2:
+                        st.markdown("**Key Events**")
+                        if trends.get("biggest_improvement"):
+                            bi = trends["biggest_improvement"]
+                            st.markdown(f"- **Best month**: {bi['month']} ({bi['change_months']:+d} months)")
+                        if trends.get("biggest_setback") and trends["biggest_setback"]["change_months"] > 0:
+                            bs = trends["biggest_setback"]
+                            st.markdown(f"- **Setback**: {bs['month']} ({bs['change_months']:+d} months)")
+
+            # Raw data expander
+            with st.expander("View Raw Snapshot Data"):
+                st.dataframe(snapshots_df, use_container_width=True)
+
+        else:
+            st.info(
+                "No historical data available yet. Click 'Reconstruct History from YNAB' "
+                "to analyze your transaction history and build payoff timeline tracking."
+            )
 
 
 if __name__ == "__main__":
